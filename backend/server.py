@@ -126,9 +126,10 @@ async def lifespan(app: FastAPI):
         pass
 
     await _seed_admin()
-    await _seed_example_data()
-    await _seed_agents()
     await _seed_rate_cards()
+    await _seed_agents()
+    await _seed_example_data()
+    await _seed_contract_templates()
     logger.info("cdxi | OS v2.0 started (db=%s)", DB_NAME)
     try:
         yield
@@ -2225,26 +2226,51 @@ async def _seed_example_data() -> None:
         await db.milestones.insert_one({"id": str(uuid.uuid4()), "project_id": p2, "created_at": now, **m})
 
     # Seed sample contract template
+    if await db.contract_templates.count_documents({}) == 0:
+        await db.contract_templates.insert_one({
+            "id": str(uuid.uuid4()),
+            "name": "Standard SOW",
+            "template_type": "sow",
+            "body_template": "STATEMENT OF WORK\n\nClient: {{client_name}}\nDate: {{date}}\n\nScope of Work:\n{{scope}}\n\nDeliverables:\n{{deliverables}}\n\nPayment Terms:\n{{payment_terms}}",
+            "variables": ["scope", "deliverables", "payment_terms"],
+            "version": 1,
+            "is_active": True,
+            "created_at": now,
+        })
+
+        await db.contract_templates.insert_one({
+            "id": str(uuid.uuid4()),
+            "name": "Master Service Agreement",
+            "template_type": "msa",
+            "body_template": "MASTER SERVICE AGREEMENT\n\nThis Agreement is entered into between cdxi ventures and {{client_name}} on {{date}}.\n\n1. SERVICES: {{services_description}}\n\n2. TERM: This agreement commences on {{start_date}} and continues until terminated.\n\n3. FEES: As per the attached rate card.\n\n4. CONFIDENTIALITY: Both parties agree to maintain confidentiality.",
+            "variables": ["services_description", "start_date"],
+            "version": 1,
+            "is_active": True,
+            "created_at": now,
+        })
+
+    logger.info("Seeded example clients + templates")
+
+
+async def _seed_contract_templates() -> None:
+    count = await db.contract_templates.count_documents({})
+    if count > 0:
+        return
+    now = datetime.now(timezone.utc).isoformat()
     await db.contract_templates.insert_one({
         "id": str(uuid.uuid4()),
         "name": "Standard SOW",
         "template_type": "sow",
         "body_template": "STATEMENT OF WORK\n\nClient: {{client_name}}\nDate: {{date}}\n\nScope of Work:\n{{scope}}\n\nDeliverables:\n{{deliverables}}\n\nPayment Terms:\n{{payment_terms}}",
         "variables": ["scope", "deliverables", "payment_terms"],
-        "version": 1,
-        "is_active": True,
-        "created_at": now,
+        "version": 1, "is_active": True, "created_at": now,
     })
-
     await db.contract_templates.insert_one({
         "id": str(uuid.uuid4()),
         "name": "Master Service Agreement",
         "template_type": "msa",
         "body_template": "MASTER SERVICE AGREEMENT\n\nThis Agreement is entered into between cdxi ventures and {{client_name}} on {{date}}.\n\n1. SERVICES: {{services_description}}\n\n2. TERM: This agreement commences on {{start_date}} and continues until terminated.\n\n3. FEES: As per the attached rate card.\n\n4. CONFIDENTIALITY: Both parties agree to maintain confidentiality.",
         "variables": ["services_description", "start_date"],
-        "version": 1,
-        "is_active": True,
-        "created_at": now,
+        "version": 1, "is_active": True, "created_at": now,
     })
-
-    logger.info("Seeded example clients + templates")
+    logger.info("Seeded contract templates")
