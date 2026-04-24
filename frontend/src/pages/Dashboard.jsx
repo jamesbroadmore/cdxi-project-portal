@@ -1,333 +1,286 @@
-import React, { useCallback, useEffect, useState } from "react";
-import {
-    api,
-    formatCurrency,
-    formatDate,
-    getErrorMessage,
-    isPastDate,
-} from "@/lib/api";
-import { useAuth } from "@/context/AuthContext";
+import React, { useEffect, useState, useCallback } from "react";
+import { Link } from "react-router-dom";
+import { api, formatCurrency, formatDateTime } from "@/lib/api";
 import { toast } from "sonner";
-import KpiCard from "@/components/KpiCard";
-import StatusBadge from "@/components/StatusBadge";
-import NewClientDialog from "@/components/NewClientDialog";
-import ClientDetailDrawer from "@/components/ClientDetailDrawer";
 import {
-    Plus,
-    SignOut,
-    Stack,
-    CurrencyCircleDollar,
-    Warning,
-    ArrowUpRight,
-    CircleNotch,
-} from "@phosphor-icons/react";
+  Users, FolderKanban, TrendingUp, AlertCircle, Clock,
+  Bot, ArrowUpRight, Activity, ChevronRight, Timer, Eye
+} from "lucide-react";
 
-export default function Dashboard() {
-    const { user, logout } = useAuth();
-    const [clients, setClients] = useState([]);
-    const [kpis, setKpis] = useState(null);
-    const [loading, setLoading] = useState(true);
-    const [dialogOpen, setDialogOpen] = useState(false);
-    const [activeClient, setActiveClient] = useState(null);
-
-    const refreshKpis = useCallback(async () => {
-        try {
-            const { data } = await api.get("/kpis");
-            setKpis(data);
-        } catch (err) {
-            console.warn("KPI refresh failed:", err?.message || err);
-        }
-    }, []);
-
-    const load = useCallback(async () => {
-        setLoading(true);
-        try {
-            const [cRes, kRes] = await Promise.all([
-                api.get("/clients"),
-                api.get("/kpis"),
-            ]);
-            setClients(cRes.data);
-            setKpis(kRes.data);
-        } catch (err) {
-            if (err?.response?.status !== 401) {
-                toast.error(getErrorMessage(err, "Failed to load dashboard"));
-            }
-        } finally {
-            setLoading(false);
-        }
-    }, []);
-
-    useEffect(() => {
-        load();
-    }, [load]);
-
-    const openClient = (c) => setActiveClient(c);
-
-    const onDrawerChange = (updated) => {
-        if (updated === null) {
-            setActiveClient(null);
-            load();
-            return;
-        }
-        setActiveClient(updated);
-        setClients((prev) =>
-            prev.map((c) => (c.id === updated.id ? updated : c)),
-        );
-        refreshKpis();
-    };
-
-    return (
-        <div className="grain min-h-screen bg-[#08080A] text-white">
-            {/* Header */}
-            <header className="border-b border-[#27272A] bg-[#08080A]">
-                <div className="mx-auto flex max-w-[1400px] items-center justify-between px-6 py-5 md:px-10">
-                    <div className="flex items-center gap-4">
-                        <div className="flex h-10 w-10 items-center justify-center border border-[#27272A] bg-[#0C0C0E]">
-                            <span className="mono font-display text-xl font-black">
-                                c
-                            </span>
-                        </div>
-                        <div>
-                            <div className="font-display text-xl font-bold leading-none tracking-tight">
-                                cdxi Admin OS
-                            </div>
-                            <div className="mono mt-1 text-[10px] uppercase tracking-[0.3em] text-zinc-500">
-                                Multi-Client Control Panel
-                            </div>
-                        </div>
-                    </div>
-                    <div className="flex items-center gap-3">
-                        <div className="mono hidden text-right text-[10px] uppercase tracking-[0.25em] text-zinc-500 sm:block">
-                            <div>{user?.email}</div>
-                            <div className="text-emerald-400">● online</div>
-                        </div>
-                        <button
-                            onClick={() => setDialogOpen(true)}
-                            data-testid="new-client-button"
-                            className="inline-flex h-10 items-center gap-2 bg-white px-4 text-xs uppercase tracking-[0.25em] text-black transition-colors hover:bg-zinc-200"
-                        >
-                            <Plus size={14} weight="bold" />
-                            New Client
-                        </button>
-                        <button
-                            onClick={logout}
-                            data-testid="logout-button"
-                            aria-label="Sign out"
-                            className="flex h-10 w-10 items-center justify-center border border-[#27272A] text-zinc-400 transition-colors hover:bg-[#1A1A1D] hover:text-white"
-                            title="Sign out"
-                        >
-                            <SignOut size={14} />
-                        </button>
-                    </div>
-                </div>
-            </header>
-
-            <main className="mx-auto max-w-[1400px] px-6 py-8 md:px-10 md:py-10">
-                {/* Overlines */}
-                <div className="flex items-baseline justify-between">
-                    <div>
-                        <p className="mono text-[10px] uppercase tracking-[0.3em] text-zinc-500">
-                            cdxi/ops/overview
-                        </p>
-                        <h1 className="font-display mt-2 text-4xl font-bold leading-none tracking-tight sm:text-5xl">
-                            Control Centre
-                        </h1>
-                    </div>
-                    <div className="hidden text-right md:block">
-                        <p className="mono text-[10px] uppercase tracking-[0.25em] text-zinc-500">
-                            {new Date().toLocaleDateString("en-GB", {
-                                weekday: "long",
-                                day: "2-digit",
-                                month: "long",
-                                year: "numeric",
-                            })}
-                        </p>
-                    </div>
-                </div>
-
-                {/* KPI cards */}
-                <section
-                    className="mt-8 grid grid-cols-1 gap-0 border border-[#27272A] md:grid-cols-3"
-                    data-testid="kpi-grid"
-                >
-                    <div className="border-b border-[#27272A] md:border-b-0 md:border-r">
-                        <KpiCard
-                            testId="kpi-active-projects"
-                            label="Active Projects"
-                            value={kpis ? kpis.active_projects : "—"}
-                            sub={`${kpis?.total_clients ?? 0} total clients`}
-                            icon={<Stack size={14} />}
-                        />
-                    </div>
-                    <div className="border-b border-[#27272A] md:border-b-0 md:border-r">
-                        <KpiCard
-                            testId="kpi-revenue-pipeline"
-                            label="Revenue Pipeline"
-                            value={
-                                kpis
-                                    ? formatCurrency(kpis.revenue_pipeline)
-                                    : "—"
-                            }
-                            sub="outstanding unpaid"
-                            icon={<CurrencyCircleDollar size={14} />}
-                        />
-                    </div>
-                    <div>
-                        <KpiCard
-                            testId="kpi-overdue-payments"
-                            label="Overdue Payments"
-                            value={
-                                kpis ? formatCurrency(kpis.overdue_payments) : "—"
-                            }
-                            sub="past due date"
-                            tone={kpis && kpis.overdue_payments > 0 ? "danger" : "default"}
-                            icon={<Warning size={14} />}
-                        />
-                    </div>
-                </section>
-
-                {/* Clients table */}
-                <section className="mt-10">
-                    <div className="flex items-center justify-between border-b border-[#27272A] pb-3">
-                        <h2 className="font-display text-xl font-semibold tracking-tight">
-                            Clients
-                        </h2>
-                        <p className="mono text-[10px] uppercase tracking-[0.25em] text-zinc-500">
-                            {clients.length} record{clients.length === 1 ? "" : "s"}
-                        </p>
-                    </div>
-
-                    <div className="border border-t-0 border-[#27272A]">
-                        {/* Header */}
-                        <div className="hidden grid-cols-[1.3fr_1.3fr_1fr_1.4fr_1fr_1fr_40px] gap-4 border-b border-[#27272A] bg-[#0C0C0E] px-5 py-3 mono text-[10px] uppercase tracking-[0.25em] text-zinc-500 md:grid">
-                            <div>Client</div>
-                            <div>Project</div>
-                            <div>Status</div>
-                            <div>Progress</div>
-                            <div>Next Payment</div>
-                            <div>Due</div>
-                            <div />
-                        </div>
-
-                        {loading && (
-                            <div
-                                className="flex items-center justify-center gap-2 p-10 mono text-xs uppercase tracking-[0.25em] text-zinc-500"
-                                data-testid="clients-loading"
-                            >
-                                <CircleNotch className="animate-spin" size={14} />
-                                Loading
-                            </div>
-                        )}
-
-                        {!loading && clients.length === 0 && (
-                            <div
-                                className="p-10 text-center mono text-xs uppercase tracking-[0.25em] text-zinc-500"
-                                data-testid="clients-empty"
-                            >
-                                No clients yet. Click <span className="text-white">+ New Client</span> to onboard one.
-                            </div>
-                        )}
-
-                        {!loading &&
-                            clients.map((c, idx) => (
-                                <ClientRow
-                                    key={c.id}
-                                    client={c}
-                                    idx={idx}
-                                    onOpen={() => openClient(c)}
-                                />
-                            ))}
-                    </div>
-                </section>
-
-                <footer className="mt-16 flex flex-col items-start justify-between gap-3 border-t border-[#27272A] pt-6 sm:flex-row sm:items-center">
-                    <div className="mono text-[10px] uppercase tracking-[0.3em] text-zinc-600">
-                        cdxi · business operating system · revenue enforcement engine
-                    </div>
-                    <div className="mono text-[10px] uppercase tracking-[0.25em] text-zinc-600">
-                        v1.0 · ops://live
-                    </div>
-                </footer>
-            </main>
-
-            <NewClientDialog
-                open={dialogOpen}
-                onOpenChange={setDialogOpen}
-                onCreated={(c) => {
-                    setClients((prev) => [c, ...prev]);
-                    refreshKpis();
-                }}
-            />
-
-            <ClientDetailDrawer
-                client={activeClient}
-                onClose={() => setActiveClient(null)}
-                onChange={onDrawerChange}
-            />
+function KpiCard({ label, value, sub, icon: Icon, accent = "default", trend }) {
+  const accents = {
+    default: "text-zinc-400 bg-zinc-800/50 border-zinc-700/50",
+    success: "text-emerald-400 bg-emerald-500/10 border-emerald-500/20",
+    danger: "text-red-400 bg-red-500/10 border-red-500/20",
+    warning: "text-amber-400 bg-amber-500/10 border-amber-500/20",
+    indigo: "text-indigo-400 bg-indigo-500/10 border-indigo-500/20",
+  };
+  return (
+    <div className="rounded-xl border border-zinc-800 bg-zinc-900 p-5 flex flex-col gap-3">
+      <div className="flex items-center justify-between">
+        <div className={`rounded-lg border p-2 ${accents[accent]}`}>
+          <Icon size={16} />
         </div>
-    );
+        {trend !== undefined && (
+          <span className={`text-xs font-mono ${ trend >= 0 ? "text-emerald-400" : "text-red-400" }`}>
+            {trend >= 0 ? "+" : ""}{trend}%
+          </span>
+        )}
+      </div>
+      <div>
+        <div className="text-2xl font-bold text-white tracking-tight">{value}</div>
+        <div className="text-xs text-zinc-500 mt-0.5">{label}</div>
+        {sub && <div className="text-xs text-zinc-600 mt-0.5">{sub}</div>}
+      </div>
+    </div>
+  );
 }
 
-function ClientRow({ client, idx, onOpen }) {
-    const p = client.project;
-    const progress = p?.progress ?? 0;
-    const status = p?.status ?? "Not Started";
-    const overdue =
-        status !== "Completed" &&
-        p?.next_due &&
-        p?.next_payment != null &&
-        isPastDate(p.next_due);
-    const fillClass =
-        status === "Completed"
-            ? "completed"
-            : overdue
-              ? "delayed"
-              : "";
+function AgentStatusBadge({ status }) {
+  const map = {
+    complete: "bg-emerald-500/10 text-emerald-400 border-emerald-500/20",
+    escalated: "bg-amber-500/10 text-amber-400 border-amber-500/20",
+    running: "bg-blue-500/10 text-blue-400 border-blue-500/20",
+    failed: "bg-red-500/10 text-red-400 border-red-500/20",
+    cancelled: "bg-zinc-500/10 text-zinc-400 border-zinc-500/20",
+  };
+  return (
+    <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider ${map[status] || map.cancelled}`}>
+      {status}
+    </span>
+  );
+}
+
+function HealthBar({ score }) {
+  const color = score >= 75 ? "bg-emerald-500" : score >= 50 ? "bg-amber-500" : "bg-red-500";
+  return (
+    <div className="flex items-center gap-2">
+      <div className="flex-1 rounded-full bg-zinc-800 h-1.5">
+        <div className={`h-full rounded-full ${color} transition-all`} style={{ width: `${score}%` }} />
+      </div>
+      <span className="text-xs text-zinc-400 font-mono w-8 text-right">{Math.round(score)}</span>
+    </div>
+  );
+}
+
+export default function Dashboard() {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  const load = useCallback(async () => {
+    try {
+      const { data: d } = await api.get("/dashboard");
+      setData(d);
+    } catch (err) {
+      if (err?.response?.status !== 401) toast.error("Failed to load dashboard");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  if (loading) {
     return (
-        <button
-            onClick={onOpen}
-            data-testid={`client-row-${idx}`}
-            className="group grid w-full grid-cols-1 items-center gap-2 border-b border-[#27272A] px-5 py-4 text-left transition-colors last:border-b-0 hover:bg-[#0F0F12] md:grid-cols-[1.3fr_1.3fr_1fr_1.4fr_1fr_1fr_40px] md:gap-4"
-        >
-            <div className="flex items-baseline gap-3">
-                <span className="mono text-[10px] text-zinc-500">
-                    {String(idx + 1).padStart(2, "0")}
-                </span>
-                <span className="truncate text-sm font-medium text-white">
-                    {client.name}
-                </span>
-            </div>
-            <div className="truncate text-sm text-zinc-300">{p?.name || "—"}</div>
-            <div>
-                <StatusBadge status={status} testId={`client-row-${idx}-status`} />
-            </div>
-            <div className="flex items-center gap-3">
-                <div className="progress-bar-track h-1.5 w-full">
-                    <div
-                        className={`progress-bar-fill h-full ${fillClass}`}
-                        style={{ width: `${progress}%` }}
-                    />
-                </div>
-                <span className="mono w-10 shrink-0 text-right text-[11px] text-zinc-400">
-                    {progress}%
-                </span>
-            </div>
-            <div className="mono text-sm text-white">
-                {p?.next_payment != null ? formatCurrency(p.next_payment) : "—"}
-            </div>
-            <div
-                className={`mono text-sm ${
-                    overdue ? "text-red-500" : "text-zinc-300"
-                }`}
-            >
-                {formatDate(p?.next_due)}
-            </div>
-            <div className="hidden justify-end md:flex">
-                <ArrowUpRight
-                    size={16}
-                    className="text-zinc-600 transition-colors group-hover:text-white"
-                />
-            </div>
-        </button>
+      <div className="flex h-96 items-center justify-center">
+        <div className="h-6 w-6 animate-spin rounded-full border-2 border-zinc-700 border-t-indigo-400" />
+      </div>
     );
+  }
+
+  const kpis = data || {};
+
+  return (
+    <div className="p-6 lg:p-8 space-y-6">
+      {/* Header */}
+      <div>
+        <p className="text-xs font-mono text-zinc-500 uppercase tracking-widest">cdxi / overview</p>
+        <h1 className="mt-1 text-2xl font-bold text-white tracking-tight">Control Centre</h1>
+      </div>
+
+      {/* KPI Grid */}
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+        <KpiCard
+          label="Total Clients"
+          value={kpis.total_clients ?? 0}
+          sub={`${kpis.active_clients ?? 0} active`}
+          icon={Users}
+          accent="indigo"
+        />
+        <KpiCard
+          label="Active Projects"
+          value={kpis.active_projects ?? 0}
+          icon={FolderKanban}
+          accent="default"
+        />
+        <KpiCard
+          label="Revenue Pipeline"
+          value={formatCurrency(kpis.revenue_pipeline ?? 0)}
+          sub="outstanding"
+          icon={TrendingUp}
+          accent="success"
+        />
+        <KpiCard
+          label="Overdue AR"
+          value={formatCurrency(kpis.overdue_payments ?? 0)}
+          sub="past due date"
+          icon={AlertCircle}
+          accent={kpis.overdue_payments > 0 ? "danger" : "default"}
+        />
+      </div>
+
+      {/* Secondary KPIs */}
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-3">
+        <div className="rounded-xl border border-zinc-800 bg-zinc-900 p-4">
+          <div className="flex items-center gap-2 mb-2">
+            <Clock size={14} className="text-zinc-500" />
+            <span className="text-xs text-zinc-500">Active Timers</span>
+          </div>
+          <div className="text-xl font-bold text-white">{kpis.active_timers ?? 0}</div>
+        </div>
+        <div className="rounded-xl border border-zinc-800 bg-zinc-900 p-4">
+          <div className="flex items-center gap-2 mb-2">
+            <Bot size={14} className="text-zinc-500" />
+            <span className="text-xs text-zinc-500">Pending Reviews</span>
+          </div>
+          <div className="text-xl font-bold text-white">
+            <span className={kpis.pending_reviews > 0 ? "text-amber-400" : ""}>{kpis.pending_reviews ?? 0}</span>
+          </div>
+        </div>
+        <div className="rounded-xl border border-zinc-800 bg-zinc-900 p-4">
+          <div className="flex items-center gap-2 mb-2">
+            <AlertCircle size={14} className="text-zinc-500" />
+            <span className="text-xs text-zinc-500">At-Risk Clients</span>
+          </div>
+          <div className="text-xl font-bold text-white">
+            <span className={kpis.at_risk_clients > 0 ? "text-red-400" : ""}>{kpis.at_risk_clients ?? 0}</span>
+          </div>
+        </div>
+      </div>
+
+      {/* Two-col layout */}
+      <div className="grid gap-6 lg:grid-cols-5">
+        {/* Recent Activity */}
+        <div className="lg:col-span-3 rounded-xl border border-zinc-800 bg-zinc-900">
+          <div className="flex items-center justify-between border-b border-zinc-800 px-4 py-3">
+            <div className="flex items-center gap-2">
+              <Activity size={14} className="text-zinc-500" />
+              <span className="text-sm font-medium text-zinc-200">Recent Activity</span>
+            </div>
+          </div>
+          <div className="divide-y divide-zinc-800/50">
+            {(kpis.recent_events || []).slice(0, 8).map((evt) => (
+              <div key={evt.event_id} className="flex items-start gap-3 px-4 py-3">
+                <div className="mt-0.5 h-1.5 w-1.5 rounded-full bg-indigo-400 shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <div className="text-xs text-zinc-300 font-medium">{evt.event_name}</div>
+                  <div className="text-xs text-zinc-500">{evt.object_type} · {formatDateTime(evt.occurred_at)}</div>
+                </div>
+              </div>
+            ))}
+            {(!kpis.recent_events || kpis.recent_events.length === 0) && (
+              <div className="px-4 py-8 text-center text-xs text-zinc-600">No activity yet</div>
+            )}
+          </div>
+        </div>
+
+        {/* Right panel */}
+        <div className="lg:col-span-2 space-y-4">
+          {/* Agent runs */}
+          <div className="rounded-xl border border-zinc-800 bg-zinc-900">
+            <div className="flex items-center justify-between border-b border-zinc-800 px-4 py-3">
+              <div className="flex items-center gap-2">
+                <Bot size={14} className="text-zinc-500" />
+                <span className="text-sm font-medium text-zinc-200">Recent Agent Runs</span>
+              </div>
+              <Link to="/agents" className="text-xs text-indigo-400 hover:text-indigo-300 flex items-center gap-1">
+                View all <ChevronRight size={12} />
+              </Link>
+            </div>
+            <div className="divide-y divide-zinc-800/50">
+              {(kpis.recent_agent_runs || []).slice(0, 4).map((run) => (
+                <div key={run.id} className="flex items-center justify-between px-4 py-2.5">
+                  <div>
+                    <div className="text-xs text-zinc-300 capitalize">{run.agent_type?.replace(/_/g, " ")}</div>
+                    <div className="text-[10px] text-zinc-600">{formatDateTime(run.started_at)}</div>
+                  </div>
+                  <AgentStatusBadge status={run.execution_status} />
+                </div>
+              ))}
+              {(!kpis.recent_agent_runs || kpis.recent_agent_runs.length === 0) && (
+                <div className="px-4 py-6 text-center text-xs text-zinc-600">No agent runs yet</div>
+              )}
+            </div>
+          </div>
+
+          {/* Health distribution */}
+          <div className="rounded-xl border border-zinc-800 bg-zinc-900 p-4">
+            <div className="flex items-center gap-2 mb-3">
+              <Activity size={14} className="text-zinc-500" />
+              <span className="text-sm font-medium text-zinc-200">Client Health</span>
+            </div>
+            <div className="space-y-2">
+              {[
+                { label: "Healthy (75–100)", key: "healthy", color: "bg-emerald-500" },
+                { label: "Moderate (50–74)", key: "moderate", color: "bg-amber-500" },
+                { label: "At Risk (0–49)", key: "at_risk", color: "bg-red-500" },
+              ].map(({ label, key, color }) => {
+                const total = Object.values(kpis.health_distribution || {}).reduce((a, b) => a + b, 0) || 1;
+                const count = kpis.health_distribution?.[key] || 0;
+                const pct = Math.round((count / total) * 100);
+                return (
+                  <div key={key}>
+                    <div className="flex justify-between text-xs text-zinc-500 mb-1">
+                      <span>{label}</span>
+                      <span>{count}</span>
+                    </div>
+                    <div className="h-1.5 rounded-full bg-zinc-800">
+                      <div className={`h-full rounded-full ${color}`} style={{ width: `${pct}%` }} />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Recent invoices */}
+      {kpis.recent_invoices && kpis.recent_invoices.length > 0 && (
+        <div className="rounded-xl border border-zinc-800 bg-zinc-900">
+          <div className="flex items-center justify-between border-b border-zinc-800 px-4 py-3">
+            <span className="text-sm font-medium text-zinc-200">Recent Invoices</span>
+            <Link to="/billing" className="text-xs text-indigo-400 hover:text-indigo-300 flex items-center gap-1">
+              View all <ChevronRight size={12} />
+            </Link>
+          </div>
+          <div className="divide-y divide-zinc-800/50">
+            {kpis.recent_invoices.map((inv) => (
+              <div key={inv.id} className="flex items-center justify-between px-4 py-3">
+                <div>
+                  <div className="text-xs font-medium text-zinc-300">{inv.invoice_number}</div>
+                  <div className="text-xs text-zinc-500">{inv.client_name} · due {inv.due_date}</div>
+                </div>
+                <div className="text-right">
+                  <div className="text-sm font-semibold text-white">{formatCurrency(inv.total_amount)}</div>
+                  <InvoiceStatusBadge status={inv.status} />
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function InvoiceStatusBadge({ status }) {
+  const map = {
+    draft: "text-zinc-400",
+    sent: "text-blue-400",
+    paid: "text-emerald-400",
+    overdue: "text-red-400",
+    disputed: "text-amber-400",
+  };
+  return <span className={`text-[10px] font-medium uppercase ${map[status] || "text-zinc-500"}`}>{status}</span>;
 }

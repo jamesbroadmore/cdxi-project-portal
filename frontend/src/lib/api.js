@@ -1,103 +1,82 @@
 import axios from "axios";
 
-// Fall back to same-origin in production so missing env vars don't produce
-// "undefined/api" request URLs.
-const RAW_BACKEND_URL =
-    (typeof process !== "undefined" && process.env.REACT_APP_BACKEND_URL) || "";
-const BACKEND_URL = String(RAW_BACKEND_URL).replace(/\/+$/, "");
-
-export const API = `${BACKEND_URL}/api`;
-export const TOKEN_KEY = "cdxi_token";
+const BASE = process.env.REACT_APP_BACKEND_URL || "";
 
 export const api = axios.create({
-    baseURL: API,
-    timeout: 30_000,
+  baseURL: `${BASE}/api`,
+  withCredentials: false,
 });
 
+// Attach token from localStorage
 api.interceptors.request.use((config) => {
-    const token = localStorage.getItem(TOKEN_KEY);
-    if (token) {
-        config.headers.Authorization = `Bearer ${token}`;
-    }
-    return config;
+  const token = localStorage.getItem("access_token");
+  if (token) config.headers.Authorization = `Bearer ${token}`;
+  return config;
 });
 
-// Response interceptor: on 401 clear the stale token and bounce to login.
-// Avoids the app getting stuck in a weird "logged in but every request fails"
-// state after a token expires.
-let authFailureHandler = null;
-export function registerAuthFailureHandler(fn) {
-    authFailureHandler = fn;
-}
-
+// On 401 redirect to login
 api.interceptors.response.use(
-    (res) => res,
-    (error) => {
-        const status = error?.response?.status;
-        if (status === 401) {
-            localStorage.removeItem(TOKEN_KEY);
-            if (typeof authFailureHandler === "function") {
-                try {
-                    authFailureHandler();
-                } catch (e) {
-                    // swallow - handler must not throw
-                }
-            }
-        }
-        return Promise.reject(error);
-    },
+  (r) => r,
+  (err) => {
+    if (err?.response?.status === 401 && !window.location.pathname.includes("/login")) {
+      localStorage.removeItem("access_token");
+      window.location.href = "/login";
+    }
+    return Promise.reject(err);
+  }
 );
 
-export function formatApiErrorDetail(detail) {
-    if (detail == null) return "Something went wrong. Please try again.";
-    if (typeof detail === "string") return detail;
-    if (Array.isArray(detail))
-        return detail
-            .map((e) =>
-                e && typeof e.msg === "string" ? e.msg : JSON.stringify(e),
-            )
-            .filter(Boolean)
-            .join(" ");
-    if (detail && typeof detail.msg === "string") return detail.msg;
-    return String(detail);
+export function getErrorMessage(err, fallback = "Something went wrong") {
+  return err?.response?.data?.detail || err?.message || fallback;
 }
 
-export function getErrorMessage(err, fallback = "Something went wrong.") {
-    if (!err) return fallback;
-    const detail = err?.response?.data?.detail;
-    if (detail != null) return formatApiErrorDetail(detail);
-    if (err.message) return err.message;
-    return fallback;
+export function formatCurrency(value, currency = "AUD") {
+  if (value === null || value === undefined) return "—";
+  return new Intl.NumberFormat("en-AU", {
+    style: "currency",
+    currency,
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 2,
+  }).format(Number(value));
 }
 
-export function formatCurrency(n) {
-    if (n == null || Number.isNaN(Number(n))) return "—";
-    return `$${Number(n).toLocaleString("en-US", {
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2,
-    })}`;
-}
-
-export function formatDate(iso) {
-    if (!iso) return "—";
-    const d = new Date(iso);
-    if (Number.isNaN(d.getTime())) return "—";
-    return d.toLocaleDateString("en-GB", {
-        day: "2-digit",
-        month: "short",
-        year: "numeric",
+export function formatDate(value) {
+  if (!value) return "—";
+  try {
+    return new Date(value.includes("T") ? value : value + "T00:00:00").toLocaleDateString("en-GB", {
+      day: "numeric", month: "short", year: "numeric",
     });
+  } catch {
+    return value;
+  }
 }
 
-/**
- * True if the given ISO (YYYY-MM-DD) date is strictly before today, compared
- * as a calendar date (not a timestamp). Avoids timezone-dependent flapping.
- */
-export function isPastDate(iso) {
-    if (!iso || typeof iso !== "string") return false;
-    const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso);
-    if (!match) return false;
-    const today = new Date();
-    const todayIso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
-    return match[0] < todayIso;
+export function formatDateTime(value) {
+  if (!value) return "—";
+  try {
+    return new Date(value).toLocaleString("en-GB", {
+      day: "numeric", month: "short", year: "numeric",
+      hour: "2-digit", minute: "2-digit",
+    });
+  } catch {
+    return value;
+  }
+}
+
+export function isPastDate(value) {
+  if (!value) return false;
+  try {
+    const d = new Date(value.includes("T") ? value : value + "T00:00:00");
+    return d < new Date();
+  } catch {
+    return false;
+  }
+}
+
+export function formatDuration(secs) {
+  if (!secs) return "0m";
+  const h = Math.floor(secs / 3600);
+  const m = Math.floor((secs % 3600) / 60);
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}m`;
 }
