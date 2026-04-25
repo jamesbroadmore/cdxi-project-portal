@@ -128,9 +128,8 @@ async def lifespan(app: FastAPI):
     await _seed_admin()
     await _seed_rate_cards()
     await _seed_agents()
-    await _seed_example_data()
     await _seed_contract_templates()
-    logger.info("cdxi | OS v2.0 started (db=%s)", DB_NAME)
+    logger.info("cdxi | OS v2.1 started (db=%s)", DB_NAME)
     try:
         yield
     finally:
@@ -199,7 +198,48 @@ async def get_current_user(
     )
     if not user:
         raise HTTPException(status_code=401, detail="User not found")
+    # Backfill tenant_id for legacy users
+    user["tenant_id"] = user.get("tenant_id") or DEFAULT_TENANT
     return user
+
+
+# ---------------------------------------------------------------------------
+# Multi-tenant helpers
+# ---------------------------------------------------------------------------
+
+DEFAULT_TENANT = "default"
+
+
+def tid(user: dict) -> str:
+    """Resolve the tenant_id for the current authenticated user."""
+    return user.get("tenant_id") or DEFAULT_TENANT
+
+
+def tquery(user: dict, extra: Optional[dict] = None) -> dict:
+    """Build a Mongo query scoped to the user's tenant.
+
+    Backfills legacy docs that may not yet carry tenant_id by also
+    matching docs where tenant_id is missing/null when tenant is the
+    default. New writes always set tenant_id explicitly.
+    """
+    t = tid(user)
+    base: dict
+    if t == DEFAULT_TENANT:
+        base = {"$or": [{"tenant_id": t}, {"tenant_id": {"$exists": False}}, {"tenant_id": None}]}
+    else:
+        base = {"tenant_id": t}
+    if not extra:
+        return base
+    # Merge extra into base. If base has $or, AND-combine with extra.
+    if "$or" in base:
+        return {"$and": [base, extra]}
+    return {**base, **extra}
+
+
+def tdoc(user: dict, doc: dict) -> dict:
+    """Stamp a document with the current tenant_id (idempotent)."""
+    doc["tenant_id"] = tid(user)
+    return doc
 
 
 # ---------------------------------------------------------------------------
@@ -2120,6 +2160,7 @@ async def create_user(body: UserCreate, user: dict = Depends(get_current_user)) 
         "name": body.display_name,
         "role": body.role,
         "status": "active",
+        "tenant_id": tid(user),
         "password_hash": hash_password(body.password),
         "created_by": user["id"],
         "created_at": now,
@@ -2307,9 +2348,15 @@ async def _seed_admin() -> None:
             "name": "Parker",
             "role": "admin",
             "status": "active",
+            "tenant_id": DEFAULT_TENANT,
             "created_at": datetime.now(timezone.utc).isoformat(),
         })
         logger.info("Seeded admin user (%s)", ADMIN_EMAIL)
+    elif not existing.get("tenant_id"):
+        await db.users.update_one(
+            {"id": existing["id"]}, {"$set": {"tenant_id": DEFAULT_TENANT}}
+        )
+        logger.info("Backfilled tenant_id on existing admin user")
 
 
 async def _seed_agents() -> None:
