@@ -1670,7 +1670,8 @@ async def invoice_checkout(
 
 
 @api.post("/invoices/{invoice_id}/send")
-async def send_invoice(invoice_id: str, user: dict = Depends(get_current_user)) -> dict:    inv = await db.invoices.find_one({"id": invoice_id}, {"_id": 0})
+async def send_invoice(invoice_id: str, user: dict = Depends(get_current_user)) -> dict:
+    inv = await db.invoices.find_one({"id": invoice_id}, {"_id": 0})
     if not inv:
         raise HTTPException(status_code=404, detail="Invoice not found")
     now = datetime.now(timezone.utc).isoformat()
@@ -1952,6 +1953,145 @@ async def review_agent_run(
     )
     await log_audit(f"agent_run.{body.decision}", "agent_run", run_id, actor_id=user["id"])
     return await db.agent_runs.find_one({"id": run_id}, {"_id": 0})
+
+
+# ---------------------------------------------------------------------------
+# Agent Workflow Demo — End-to-end orchestrated multi-agent run
+# ---------------------------------------------------------------------------
+
+@api.post("/agents/workflow-demo")
+async def run_workflow_demo(user: dict = Depends(get_current_user)) -> dict:
+    """Run an end-to-end demo: Chief Orchestrator -> Finance -> Client Success.
+
+    Pulls real DB context (an overdue/sent invoice + lowest-health client) and
+    runs three sequential agent invocations, returning the full chain.
+    """
+    if not EMERGENT_LLM_KEY:
+        raise HTTPException(status_code=400, detail="LLM key not configured")
+
+    from agents_service import run_agent_task
+
+    # 1. Find an overdue/sent invoice (or fall back to most recent)
+    invoice = await db.invoices.find_one(
+        {"status": {"$in": ["overdue", "sent"]}},
+        {"_id": 0},
+        sort=[("due_date", 1)],
+    )
+    if not invoice:
+        invoice = await db.invoices.find_one({}, {"_id": 0}, sort=[("created_at", -1)])
+    if not invoice:
+        # Fabricate a demo invoice context if none exists
+        invoice = {
+            "id": "demo-inv",
+            "invoice_number": "INV-DEMO-001",
+            "client_id": "demo-client",
+            "total_amount": 12500.0,
+            "balance_due": 12500.0,
+            "status": "overdue",
+            "due_date": "2025-12-15",
+            "currency": "AUD",
+        }
+
+    client = None
+    if invoice.get("client_id"):
+        client = await db.clients.find_one({"id": invoice["client_id"]}, {"_id": 0})
+    if not client:
+        client = await db.clients.find_one({}, {"_id": 0}, sort=[("health_score", 1)])
+    if not client:
+        client = {"id": "demo-client", "name": "Acme Studios", "health_score": 62, "lifecycle_stage": "active"}
+
+    days_overdue = 0
+    try:
+        if invoice.get("due_date"):
+            due = datetime.fromisoformat(str(invoice["due_date"]).replace("Z", "+00:00"))
+            if due.tzinfo is None:
+                due = due.replace(tzinfo=timezone.utc)
+            days_overdue = max(0, (datetime.now(timezone.utc) - due).days)
+    except Exception:
+        days_overdue = 0
+
+    base_context = {
+        "client_id": client.get("id"),
+        "client_name": client.get("name"),
+        "health_score": client.get("health_score"),
+        "lifecycle_stage": client.get("lifecycle_stage"),
+        "invoice_id": invoice.get("id"),
+        "invoice_number": invoice.get("invoice_number"),
+        "amount_outstanding": invoice.get("balance_due") or invoice.get("total_amount"),
+        "currency": invoice.get("currency", "AUD"),
+        "days_overdue": days_overdue,
+        "invoice_status": invoice.get("status"),
+    }
+
+    steps: list[dict] = []
+
+    # Step 1: Chief Orchestrator routes the event
+    orch = await run_agent_task(
+        agent_type="chief_orchestrator",
+        trigger_event="invoice.overdue_detected",
+        context=base_context,
+        db=db,
+        actor_id=user["id"],
+    )
+    steps.append({
+        "step": 1,
+        "agent": "chief_orchestrator",
+        "title": "Chief Orchestrator — classify & route",
+        "trigger": "invoice.overdue_detected",
+        **orch,
+    })
+
+    # Step 2: Finance Agent drafts dunning communication
+    fin_context = {**base_context, "orchestrator_priority": orch["output"].get("priority")}
+    fin = await run_agent_task(
+        agent_type="finance",
+        trigger_event="finance.draft_followup",
+        context=fin_context,
+        db=db,
+        actor_id=user["id"],
+    )
+    steps.append({
+        "step": 2,
+        "agent": "finance",
+        "title": "Finance Agent — draft follow-up",
+        "trigger": "finance.draft_followup",
+        **fin,
+    })
+
+    # Step 3: Client Success reviews health impact
+    cs_context = {
+        **base_context,
+        "finance_risk_level": fin["output"].get("risk_level"),
+        "finance_action_type": fin["output"].get("action_type"),
+    }
+    cs = await run_agent_task(
+        agent_type="client_success",
+        trigger_event="client_success.health_review",
+        context=cs_context,
+        db=db,
+        actor_id=user["id"],
+    )
+    steps.append({
+        "step": 3,
+        "agent": "client_success",
+        "title": "Client Success — health & retention plan",
+        "trigger": "client_success.health_review",
+        **cs,
+    })
+
+    avg_confidence = round(
+        sum(s.get("confidence_score") or 0 for s in steps) / len(steps), 3
+    )
+
+    return {
+        "context": base_context,
+        "steps": steps,
+        "summary": {
+            "total_steps": len(steps),
+            "average_confidence": avg_confidence,
+            "any_escalated": any(s.get("escalation_flag") for s in steps),
+        },
+    }
 
 
 # ---------------------------------------------------------------------------

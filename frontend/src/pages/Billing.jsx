@@ -3,7 +3,7 @@ import { api, formatCurrency, formatDate, formatDateTime, formatDuration } from 
 import { toast } from "sonner";
 import {
   Plus, Play, Square, Clock, FileText, Send, CheckCircle,
-  RefreshCw, ChevronDown, Zap
+  RefreshCw, ChevronDown, Zap, CreditCard
 } from "lucide-react";
 
 function InvoiceStatusBadge({ status }) {
@@ -163,6 +163,20 @@ export default function Billing() {
     } catch { toast.error("Failed to update invoice"); }
   };
 
+  const payWithStripe = async (id) => {
+    try {
+      const { data } = await api.post(`/invoices/${id}/checkout`, { origin_url: window.location.origin });
+      if (data?.url) {
+        toast.success("Redirecting to Stripe…");
+        window.location.href = data.url;
+      } else {
+        toast.error("Stripe session URL missing");
+      }
+    } catch (err) {
+      toast.error(err?.response?.data?.detail || "Stripe checkout failed");
+    }
+  };
+
   if (loading) return (
     <div className="flex h-96 items-center justify-center">
       <div className="h-6 w-6 animate-spin rounded-full border-2 border-zinc-700 border-t-indigo-400" />
@@ -291,28 +305,34 @@ export default function Billing() {
 
         {tab === "invoices" && (
           <div className="rounded-xl border border-zinc-800 bg-zinc-900 overflow-hidden">
-            <div className="hidden lg:grid grid-cols-[1fr_2fr_1fr_1fr_1fr_120px] gap-4 border-b border-zinc-800 px-5 py-3">
+            <div className="hidden lg:grid grid-cols-[1fr_2fr_1fr_1fr_1fr_180px] gap-4 border-b border-zinc-800 px-5 py-3">
               {["Invoice #","Client","Total","Due","Status","Actions"].map(h=>
                 <div key={h} className="text-[10px] font-mono uppercase tracking-widest text-zinc-500">{h}</div>
               )}
             </div>
             {invoices.length === 0 && <div className="py-8 text-center text-xs text-zinc-600">No invoices yet</div>}
             {invoices.map(inv => (
-              <div key={inv.id} className="grid grid-cols-1 gap-2 border-b border-zinc-800/50 last:border-0 px-5 py-4 lg:grid-cols-[1fr_2fr_1fr_1fr_1fr_120px] lg:items-center lg:gap-4">
+              <div key={inv.id} data-testid={`invoice-row-${inv.invoice_number}`} className="grid grid-cols-1 gap-2 border-b border-zinc-800/50 last:border-0 px-5 py-4 lg:grid-cols-[1fr_2fr_1fr_1fr_1fr_180px] lg:items-center lg:gap-4">
                 <div className="font-mono text-xs text-zinc-300">{inv.invoice_number}</div>
                 <div className="text-sm text-white">{inv.client_name}</div>
                 <div className="text-sm font-semibold text-white">{formatCurrency(inv.total_amount)}</div>
                 <div className="text-xs text-zinc-400">{formatDate(inv.due_date)}</div>
                 <div><InvoiceStatusBadge status={inv.status} /></div>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
                   {inv.status === "draft" && (
-                    <button onClick={() => sendInvoice(inv.id)}
+                    <button data-testid={`invoice-send-btn-${inv.invoice_number}`} onClick={() => sendInvoice(inv.id)}
                       className="flex items-center gap-1 rounded-lg bg-blue-500/10 border border-blue-500/20 px-2 py-1 text-[10px] text-blue-400 hover:bg-blue-500/20">
                       <Send size={10} /> Send
                     </button>
                   )}
+                  {["sent","overdue","draft"].includes(inv.status) && (
+                    <button data-testid={`invoice-stripe-pay-btn-${inv.invoice_number}`} onClick={() => payWithStripe(inv.id)}
+                      className="flex items-center gap-1 rounded-lg bg-indigo-500/10 border border-indigo-500/30 px-2 py-1 text-[10px] text-indigo-300 hover:bg-indigo-500/20">
+                      <CreditCard size={10} /> Pay
+                    </button>
+                  )}
                   {["sent","overdue"].includes(inv.status) && (
-                    <button onClick={() => markPaid(inv.id, inv.total_amount)}
+                    <button data-testid={`invoice-mark-paid-btn-${inv.invoice_number}`} onClick={() => markPaid(inv.id, inv.total_amount)}
                       className="flex items-center gap-1 rounded-lg bg-emerald-500/10 border border-emerald-500/20 px-2 py-1 text-[10px] text-emerald-400 hover:bg-emerald-500/20">
                       <CheckCircle size={10} /> Paid
                     </button>
