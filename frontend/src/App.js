@@ -2,6 +2,7 @@ import React from "react";
 import "@/App.css";
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { AuthProvider, useAuth } from "@/context/AuthContext";
+import { ThemeProvider } from "@/context/ThemeContext";
 import { Toaster } from "@/components/ui/sonner";
 import ErrorBoundary from "@/components/ErrorBoundary";
 import Layout from "@/components/Layout";
@@ -67,23 +68,25 @@ export default function App() {
     <div className="App">
       <ErrorBoundary>
         <BrowserRouter>
-          <AuthProvider>
-            <AppRoutes />
-            <Toaster
-              theme="dark"
-              position="top-right"
-              toastOptions={{
-                style: {
-                  background: "#18181b",
-                  border: "1px solid #3f3f46",
-                  color: "#ffffff",
-                  borderRadius: "8px",
-                  fontFamily: "Inter, sans-serif",
-                  fontSize: "13px",
-                },
-              }}
-            />
-          </AuthProvider>
+          <ThemeProvider>
+            <AuthProvider>
+              <AppRoutes />
+              <Toaster
+                theme="dark"
+                position="top-right"
+                toastOptions={{
+                  style: {
+                    background: "#18181b",
+                    border: "1px solid #3f3f46",
+                    color: "#ffffff",
+                    borderRadius: "8px",
+                    fontFamily: "Inter, sans-serif",
+                    fontSize: "13px",
+                  },
+                }}
+              />
+            </AuthProvider>
+          </ThemeProvider>
         </BrowserRouter>
       </ErrorBoundary>
     </div>

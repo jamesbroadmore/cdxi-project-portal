@@ -1619,9 +1619,58 @@ async def update_invoice(
     return result
 
 
-@api.post("/invoices/{invoice_id}/send")
-async def send_invoice(invoice_id: str, user: dict = Depends(get_current_user)) -> dict:
+@api.post("/invoices/{invoice_id}/checkout")
+async def invoice_checkout(
+    invoice_id: str,
+    body: CheckoutBody,
+    request: Request,
+    user: dict = Depends(get_current_user),
+) -> dict:
+    """Create a Stripe checkout session for an invoice."""
+    if not STRIPE_AVAILABLE:
+        raise HTTPException(status_code=503, detail="Stripe not available")
     inv = await db.invoices.find_one({"id": invoice_id}, {"_id": 0})
+    if not inv:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+    if inv.get("status") == "paid":
+        raise HTTPException(status_code=400, detail="Invoice already paid")
+    balance = float(inv.get("balance_due") or inv.get("total_amount") or 0)
+    if balance <= 0:
+        raise HTTPException(status_code=400, detail="Nothing to pay on this invoice")
+
+    stripe_checkout = StripeCheckout(api_key=STRIPE_API_KEY, webhook_url=_webhook_url(request))
+    origin = body.origin_url.rstrip("/")
+    success_url = f"{origin}/payment-status?session_id={{CHECKOUT_SESSION_ID}}&source=invoice&invoice_id={invoice_id}"
+    cancel_url = f"{origin}/billing"
+    client = await db.clients.find_one({"id": inv["client_id"]}, {"_id": 0, "name": 1})
+    client_name = client["name"] if client else "Client"
+    req = CheckoutSessionRequest(
+        amount=balance,
+        currency=inv.get("currency", "aud").lower(),
+        success_url=success_url,
+        cancel_url=cancel_url,
+        metadata={"invoice_id": invoice_id, "invoice_number": inv["invoice_number"]},
+    )
+    session = await stripe_checkout.create_checkout_session(req)
+    await db.payment_transactions.insert_one({
+        "id": str(uuid.uuid4()),
+        "session_id": session.session_id,
+        "invoice_id": invoice_id,
+        "milestone_id": None,
+        "project_id": None,
+        "amount": balance,
+        "currency": inv.get("currency", "aud").lower(),
+        "payment_status": "initiated",
+        "status": "open",
+        "metadata": {"invoice_id": invoice_id, "client_name": client_name},
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    })
+    await log_audit("invoice.checkout_created", "invoice", invoice_id, actor_id=user["id"])
+    return {"url": session.url, "session_id": session.session_id}
+
+
+@api.post("/invoices/{invoice_id}/send")
+async def send_invoice(invoice_id: str, user: dict = Depends(get_current_user)) -> dict:    inv = await db.invoices.find_one({"id": invoice_id}, {"_id": 0})
     if not inv:
         raise HTTPException(status_code=404, detail="Invoice not found")
     now = datetime.now(timezone.utc).isoformat()
