@@ -124,7 +124,13 @@ async def lifespan(app: FastAPI):
         await db.payment_transactions.create_index("session_id", unique=True)
     except Exception:
         pass
+    try:
+        await db.tenants.create_index("id", unique=True)
+        await db.tenants.create_index("slug", unique=True)
+    except Exception:
+        pass
 
+    await _seed_default_tenant()
     await _seed_admin()
     await _seed_rate_cards()
     await _seed_agents()
@@ -321,6 +327,17 @@ class UserUpdate(BaseModel):
     display_name: Optional[str] = None
     role: Optional[Literal["admin", "account_manager", "viewer"]] = None
     status: Optional[Literal["active", "invited", "suspended"]] = None
+    tenant_id: Optional[str] = None
+
+
+class TenantCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    slug: Optional[str] = Field(default=None, max_length=60, description="URL-safe identifier")
+
+
+class TenantUpdate(BaseModel):
+    name: Optional[str] = None
+    status: Optional[Literal["active", "suspended"]] = None
 
 
 class ClientCreate(BaseModel):
@@ -2193,9 +2210,92 @@ async def update_user(
     if current_user.get("role") != "admin" and current_user["id"] != user_id:
         raise HTTPException(status_code=403, detail="Forbidden")
     updates = body.model_dump(exclude_none=True)
+    # Only admins can change tenant_id, and target tenant must exist
+    if "tenant_id" in updates:
+        if current_user.get("role") != "admin":
+            raise HTTPException(status_code=403, detail="Only admins can change a user's tenant")
+        t = await db.tenants.find_one({"id": updates["tenant_id"]})
+        if not t:
+            raise HTTPException(status_code=404, detail="Target tenant not found")
     updates["updated_at"] = datetime.now(timezone.utc).isoformat()
     await db.users.update_one({"id": user_id}, {"$set": updates})
     return await db.users.find_one({"id": user_id}, {"_id": 0, "password_hash": 0})
+
+
+# ---------------------------------------------------------------------------
+# Tenants — Multi-tenant onboarding
+# ---------------------------------------------------------------------------
+
+def _slugify(value: str) -> str:
+    s = "".join(c.lower() if c.isalnum() else "-" for c in value).strip("-")
+    while "--" in s:
+        s = s.replace("--", "-")
+    return s or "tenant"
+
+
+@api.get("/tenants")
+async def list_tenants(user: dict = Depends(get_current_user)) -> list[dict]:
+    # Admins see all tenants; non-admins only see their own
+    if user.get("role") == "admin":
+        return await db.tenants.find({}, {"_id": 0}).sort("created_at", 1).to_list(None)
+    own = await db.tenants.find_one({"id": tid(user)}, {"_id": 0})
+    return [own] if own else []
+
+
+@api.post("/tenants", status_code=status.HTTP_201_CREATED)
+async def create_tenant(body: TenantCreate, user: dict = Depends(get_current_user)) -> dict:
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Only admins can create tenants")
+    slug = (body.slug or _slugify(body.name))[:60]
+    existing = await db.tenants.find_one({"$or": [{"id": slug}, {"slug": slug}]})
+    if existing:
+        raise HTTPException(status_code=400, detail="A tenant with this slug already exists")
+    now = datetime.now(timezone.utc).isoformat()
+    doc = {
+        "id": slug,
+        "slug": slug,
+        "name": body.name.strip(),
+        "status": "active",
+        "created_by": user["id"],
+        "created_at": now,
+        "updated_at": now,
+    }
+    await db.tenants.insert_one(doc)
+    await log_audit("tenant.created", "tenant", slug, actor_id=user["id"], tenant_id=tid(user), after_state=doc)
+    return await db.tenants.find_one({"id": slug}, {"_id": 0})
+
+
+@api.patch("/tenants/{tenant_slug}")
+async def update_tenant(
+    tenant_slug: str, body: TenantUpdate, user: dict = Depends(get_current_user)
+) -> dict:
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Only admins can update tenants")
+    existing = await db.tenants.find_one({"id": tenant_slug}, {"_id": 0})
+    if not existing:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+    updates = body.model_dump(exclude_none=True)
+    updates["updated_at"] = datetime.now(timezone.utc).isoformat()
+    await db.tenants.update_one({"id": tenant_slug}, {"$set": updates})
+    return await db.tenants.find_one({"id": tenant_slug}, {"_id": 0})
+
+
+@api.post("/tenants/{tenant_slug}/switch")
+async def switch_tenant(tenant_slug: str, user: dict = Depends(get_current_user)) -> dict:
+    """Move the current user into the specified tenant. Admins only.
+
+    Returns a fresh access token reflecting the new tenant on next /auth/me.
+    """
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Only admins can switch tenants")
+    t = await db.tenants.find_one({"id": tenant_slug}, {"_id": 0})
+    if not t:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+    await db.users.update_one(
+        {"id": user["id"]}, {"$set": {"tenant_id": tenant_slug, "updated_at": datetime.now(timezone.utc).isoformat()}}
+    )
+    await log_audit("tenant.switched", "tenant", tenant_slug, actor_id=user["id"], tenant_id=tenant_slug)
+    return {"ok": True, "tenant_id": tenant_slug, "tenant_name": t["name"]}
 
 
 # ---------------------------------------------------------------------------
@@ -2336,12 +2436,20 @@ async def stripe_webhook(request: Request) -> dict:
         raise HTTPException(status_code=503, detail="Stripe not available")
     body = await request.body()
     sig = request.headers.get("Stripe-Signature", "")
+    if not sig:
+        logger.warning("Stripe webhook called with no Stripe-Signature header")
+        raise HTTPException(status_code=400, detail="Missing Stripe-Signature header")
     stripe_checkout = StripeCheckout(api_key=STRIPE_API_KEY, webhook_url=_webhook_url(request))
     try:
         evt = await stripe_checkout.handle_webhook(body, sig)
     except Exception as exc:
-        logger.error("webhook error: %s", exc)
-        raise HTTPException(status_code=400, detail="Invalid webhook")
+        # Distinguish signature failures (security concern) from parse errors (upstream issue)
+        msg = str(exc).lower()
+        if "signature" in msg or "verify" in msg:
+            logger.error("Stripe webhook signature verification failed: %s", exc)
+            raise HTTPException(status_code=400, detail="Webhook signature verification failed")
+        logger.error("Stripe webhook payload parse error: %s", exc, exc_info=True)
+        raise HTTPException(status_code=400, detail=f"Webhook payload parse error: {exc.__class__.__name__}")
     if evt.payment_status == "paid" and evt.session_id:
         tx = await db.payment_transactions.find_one({"session_id": evt.session_id})
         if tx and tx.get("payment_status") != "paid":
@@ -2380,6 +2488,22 @@ app.include_router(api)
 # Seeding
 # ---------------------------------------------------------------------------
 
+async def _seed_default_tenant() -> None:
+    existing = await db.tenants.find_one({"id": DEFAULT_TENANT})
+    if existing:
+        return
+    now = datetime.now(timezone.utc).isoformat()
+    await db.tenants.insert_one({
+        "id": DEFAULT_TENANT,
+        "slug": DEFAULT_TENANT,
+        "name": "cdxi (default)",
+        "status": "active",
+        "created_at": now,
+        "updated_at": now,
+    })
+    logger.info("Seeded default tenant")
+
+
 async def _seed_admin() -> None:
     existing = await db.users.find_one({"email": ADMIN_EMAIL})
     if existing is None:
@@ -2395,11 +2519,22 @@ async def _seed_admin() -> None:
             "created_at": datetime.now(timezone.utc).isoformat(),
         })
         logger.info("Seeded admin user (%s)", ADMIN_EMAIL)
-    elif not existing.get("tenant_id"):
+        return
+
+    # Backfill tenant_id on legacy admin
+    if not existing.get("tenant_id"):
         await db.users.update_one(
             {"id": existing["id"]}, {"$set": {"tenant_id": DEFAULT_TENANT}}
         )
         logger.info("Backfilled tenant_id on existing admin user")
+
+    # Re-hash password if env ADMIN_PASSWORD has changed (so env is source of truth)
+    if not verify_password(ADMIN_PASSWORD, existing.get("password_hash", "")):
+        await db.users.update_one(
+            {"id": existing["id"]},
+            {"$set": {"password_hash": hash_password(ADMIN_PASSWORD)}},
+        )
+        logger.info("Updated admin password hash from env")
 
 
 async def _seed_agents() -> None:
@@ -2447,88 +2582,6 @@ async def _seed_rate_cards() -> None:
         "created_at": datetime.now(timezone.utc).isoformat(),
     })
     logger.info("Seeded default rate card")
-
-
-async def _seed_example_data() -> None:
-    if await db.clients.count_documents({}) > 0:
-        return
-    now = datetime.now(timezone.utc).isoformat()
-
-    c1 = str(uuid.uuid4())
-    p1 = str(uuid.uuid4())
-    await db.clients.insert_one({
-        "id": c1, "name": "Christian Dix", "email": "christian@m8srates.com",
-        "billing_model": "hourly", "lifecycle_stage": "active", "status": "active",
-        "primary_currency": "AUD", "tags": ["web", "branding"],
-        "health_score": 78.0, "profitability_score": 65.0,
-        "trading_name": "m8s Rates", "created_at": now, "updated_at": now,
-    })
-    await db.projects.insert_one({
-        "id": p1, "client_id": c1, "name": "m8s rates", "status": "In Progress",
-        "project_type": "service", "budget": 3300.0, "total_amount": 3300.0,
-        "budget_spent": 2200.0, "risk_level": "low",
-        "created_at": now, "updated_at": now,
-    })
-    for m in [
-        {"name": "Discovery & Strategy", "amount": 1100.0, "due_date": "2026-01-15",
-         "order": 0, "payment_status": "paid", "completed": True},
-        {"name": "Design System", "amount": 1100.0, "due_date": "2026-03-01",
-         "order": 1, "payment_status": "paid", "completed": True},
-        {"name": "Development Build", "amount": 1100.0, "due_date": "2026-04-29",
-         "order": 2, "payment_status": "unpaid", "completed": False},
-    ]:
-        await db.milestones.insert_one({"id": str(uuid.uuid4()), "project_id": p1, "created_at": now, **m})
-
-    c2 = str(uuid.uuid4())
-    p2 = str(uuid.uuid4())
-    await db.clients.insert_one({
-        "id": c2, "name": "Bianca Scott", "email": "bianca@cosmicblueprint.co",
-        "billing_model": "fixed", "lifecycle_stage": "active", "status": "active",
-        "primary_currency": "AUD", "tags": ["strategy", "coaching"],
-        "health_score": 95.0, "profitability_score": 82.0,
-        "created_at": now, "updated_at": now,
-    })
-    await db.projects.insert_one({
-        "id": p2, "client_id": c2, "name": "Cosmic Blueprint", "status": "Completed",
-        "project_type": "fixed_price", "budget": 2400.0, "total_amount": 2400.0,
-        "budget_spent": 2400.0, "risk_level": "low",
-        "created_at": now, "updated_at": now,
-    })
-    for m in [
-        {"name": "Blueprint Intake", "amount": 800.0, "due_date": "2025-11-10",
-         "order": 0, "payment_status": "paid", "completed": True},
-        {"name": "Chart Synthesis", "amount": 800.0, "due_date": "2025-12-05",
-         "order": 1, "payment_status": "paid", "completed": True},
-        {"name": "Final Delivery", "amount": 800.0, "due_date": "2026-01-20",
-         "order": 2, "payment_status": "paid", "completed": True},
-    ]:
-        await db.milestones.insert_one({"id": str(uuid.uuid4()), "project_id": p2, "created_at": now, **m})
-
-    # Seed sample contract template
-    if await db.contract_templates.count_documents({}) == 0:
-        await db.contract_templates.insert_one({
-            "id": str(uuid.uuid4()),
-            "name": "Standard SOW",
-            "template_type": "sow",
-            "body_template": "STATEMENT OF WORK\n\nClient: {{client_name}}\nDate: {{date}}\n\nScope of Work:\n{{scope}}\n\nDeliverables:\n{{deliverables}}\n\nPayment Terms:\n{{payment_terms}}",
-            "variables": ["scope", "deliverables", "payment_terms"],
-            "version": 1,
-            "is_active": True,
-            "created_at": now,
-        })
-
-        await db.contract_templates.insert_one({
-            "id": str(uuid.uuid4()),
-            "name": "Master Service Agreement",
-            "template_type": "msa",
-            "body_template": "MASTER SERVICE AGREEMENT\n\nThis Agreement is entered into between cdxi ventures and {{client_name}} on {{date}}.\n\n1. SERVICES: {{services_description}}\n\n2. TERM: This agreement commences on {{start_date}} and continues until terminated.\n\n3. FEES: As per the attached rate card.\n\n4. CONFIDENTIALITY: Both parties agree to maintain confidentiality.",
-            "variables": ["services_description", "start_date"],
-            "version": 1,
-            "is_active": True,
-            "created_at": now,
-        })
-
-    logger.info("Seeded example clients + templates")
 
 
 async def _seed_contract_templates() -> None:

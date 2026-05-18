@@ -1,0 +1,41 @@
+{
+  "summary": "Iteration 3 backend regression for cdxi | OS multi-tenant onboarding, admin password rotation, Stripe webhook error distinction, and reseed CLI. Created /app/backend/tests/test_tenants_v2.py (19 new tests, all pass) and refreshed /app/backend/tests/test_tenant_stripe.py with new password (20 tests, all pass). Total 39/39 backend tests passing against https://construct-zone-22.preview.emergentagent.com. Verified: (1) login with 220191 succeeds, login with old cdxi2026! returns 401; (2) GET /api/tenants returns auto-seeded default tenant; POST /api/tenants creates tenant with auto-generated slug from name, rejects duplicate slug with 400, rejects non-admin with 403; (3) PATCH /api/tenants/{slug} updates name+status (admin only, 404 on unknown, 403 on viewer); (4) POST /api/tenants/{slug}/switch moves admin user to new tenant in DB and subsequent /api/clients returns empty — creating a client there stamps the new tenant_id and the client is hidden after switching back to 'default'; (5) Stripe webhook returns 400 'Missing Stripe-Signature header' with no sig header, 400 with 'signature' verbiage on invalid sig, and 400 'parse error' branch on garbage payload; (6) reseed CLI: --wipe-only empties tenant collections, default run seeds 2 clients + 2 projects + 6 milestones + INV-DEMO-001 overdue invoice, re-run prints 'skipping' (idempotent), and admin login still works after reseed (confirming password hash retained). No bugs found.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_tenants_v2.py",
+    "/app/backend/tests/test_tenant_stripe.py",
+    "/app/test_reports/pytest/iter3_tenants_v2.xml",
+    "/app/test_reports/pytest/iter3_tenant_stripe_regression.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py is now 2609 lines — still approaching the 700-line guideline. Main agent intentionally skipped the split per the request, but the tenants block (lines ~2225-2298), Stripe block (~2320-2461), and seed block (~2487-2605) are all clean extraction seams.",
+    "_slugify in server.py (line 2229) does not strip leading/trailing punctuation beyond hyphens — names like '!!! Brand !!!' would slug to 'brand' OK due to the strip('-') after the alnum loop, but unicode (e.g. accents) is preserved as-is then forced lowercase. Consider unicodedata.normalize('NFKD') if international tenants are expected.",
+    "create_tenant logs audit with `tenant_id=tid(user)` (the actor's tenant) rather than the new tenant slug. Acceptable, but it means cross-tenant 'who created tenant X' lookups need to filter on object_id=slug, not tenant_id. Document this choice.",
+    "switch_tenant returns {ok, tenant_id, tenant_name} but does NOT issue a fresh JWT — the client still holds the old token with no tenant claim. Since tenant lookup is via user record at request time (good), this works, but the comment 'Returns a fresh access token reflecting the new tenant on next /auth/me' is slightly misleading: no new token is returned. Consider clarifying.",
+    "reseed.py default DB_NAME fallback is 'test_database' — same as backend/.env, which is fine, but if main agent ever differentiates dev vs prod DB this script will silently target the wrong DB. Drop the default and fail-fast as the env conventions suggest.",
+    "Stripe webhook parse-error branch returns the exception class name in the user-facing detail (`Webhook payload parse error: KeyError`). This is helpful for debugging but leaks internal types; not security-sensitive at this stage but worth a follow-up to log full trace and respond with a generic message."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_tenants_v2.py (new — 19 tests across 6 classes)",
+    "/app/backend/tests/test_tenant_stripe.py (only ADMIN_PASSWORD constant updated to 220191)"
+  ],
+  "success_rate": {
+    "backend": "100% (39/39 tests passing — 19 new + 20 regression)",
+    "frontend": "skipped (per request)"
+  },
+  "test_credentials": "parker@cdxi.au / 220191 (new). Old password cdxi2026! correctly returns 401.",
+  "seed_data_creation": "Tests create+cleanup a TEST viewer user, TEST tenant (test-onboard-co), TEST_OnboardClient under that tenant, and exercise the reseed CLI which creates 2 demo clients / 2 projects / 6 milestones / INV-DEMO-001. Session-scoped autouse teardown wipes everything. Final DB state verified: tenants=[default], users=[parker@cdxi.au], all tenant collections empty. cosmic-brand tenant from the previous manual dev session was also dropped, per main agent's note.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Two test files now cover the backend baseline: test_tenant_stripe.py (20 tests, tenant stamping/isolation + Stripe settlement) and test_tenants_v2.py (19 tests, tenant onboarding + password rotation + webhook errors + reseed CLI). Both use ADMIN_PASSWORD=220191. Both clean up after themselves. DB ends fresh (default tenant + admin user only, no demo data). To re-seed demo data: `MONGO_URL=mongodb://localhost:27017 DB_NAME=test_database python /app/backend/scripts/reseed.py`. Stripe is in test mode (sk_test_emergent); webhook tests use bogus signatures and never need a real Stripe round-trip.",
+  "rca of the issue": "N/A — no bugs found this iteration. All 39 backend tests pass on first execution."
+}

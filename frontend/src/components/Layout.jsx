@@ -1,10 +1,13 @@
-import React, { useState } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { NavLink } from "react-router-dom";
+import { api } from "@/lib/api";
+import { toast } from "sonner";
 import { useAuth } from "@/context/AuthContext";
 import { useTheme } from "@/context/ThemeContext";
 import {
   LayoutDashboard, Users, FolderKanban, Clock, FileText,
   Bot, Settings, LogOut, ChevronLeft, ChevronRight, Menu, X, Sun, Moon,
+  Building2, ChevronDown, Check,
 } from "lucide-react";
 
 const navItems = [
@@ -53,6 +56,111 @@ function CdxiLogo({ collapsed }) {
           >
             OS
           </span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ─── Tenant Switcher ──────────────────────────────────── */
+function TenantSwitcher({ user, onSwitch }) {
+  const [open, setOpen] = useState(false);
+  const [tenants, setTenants] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const isAdmin = user?.role === "admin";
+  const currentTenant = user?.tenant_id || "default";
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const { data } = await api.get("/tenants");
+      setTenants(data);
+    } catch { /* silent */ }
+    finally { setLoading(false); }
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  // Close on outside click
+  useEffect(() => {
+    if (!open) return;
+    const handler = () => setOpen(false);
+    window.addEventListener("click", handler);
+    return () => window.removeEventListener("click", handler);
+  }, [open]);
+
+  const switchTo = async (slug) => {
+    if (slug === currentTenant) { setOpen(false); return; }
+    if (!isAdmin) { toast.error("Only admins can switch tenants"); return; }
+    try {
+      await api.post(`/tenants/${slug}/switch`);
+      toast.success(`Switched to ${tenants.find(t => t.id === slug)?.name || slug}`);
+      setOpen(false);
+      // Reload page so all data refreshes under the new tenant scope
+      if (onSwitch) onSwitch();
+      else window.location.reload();
+    } catch (err) {
+      toast.error(err?.response?.data?.detail || "Failed to switch tenant");
+    }
+  };
+
+  const current = tenants.find(t => t.id === currentTenant);
+  const label = current?.name || currentTenant;
+
+  return (
+    <div className="relative" onClick={(e) => e.stopPropagation()}>
+      <button
+        data-testid="tenant-switcher-btn"
+        onClick={() => setOpen(o => !o)}
+        title={isAdmin ? "Switch tenant" : "Current tenant"}
+        className="flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-900/60 px-2.5 py-1.5 text-xs text-zinc-300 hover:border-zinc-600 hover:text-white transition-colors max-w-[200px]"
+      >
+        <Building2 size={12} className="text-indigo-400 shrink-0" />
+        <span className="truncate font-medium">{label}</span>
+        {isAdmin && <ChevronDown size={12} className={`text-zinc-500 transition-transform ${open ? "rotate-180" : ""}`} />}
+      </button>
+
+      {open && isAdmin && (
+        <div
+          data-testid="tenant-switcher-dropdown"
+          className="absolute right-0 mt-1.5 w-64 rounded-xl border border-zinc-800 bg-zinc-900 shadow-2xl shadow-black/40 overflow-hidden z-50"
+        >
+          <div className="px-3 py-2 border-b border-zinc-800/70 flex items-center justify-between">
+            <span className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest">Tenants</span>
+            <span className="text-[10px] text-zinc-600">{tenants.length}</span>
+          </div>
+          <div className="max-h-64 overflow-y-auto py-1">
+            {loading && <div className="px-3 py-2 text-xs text-zinc-500">Loading…</div>}
+            {!loading && tenants.length === 0 && (
+              <div className="px-3 py-2 text-xs text-zinc-600">No tenants found</div>
+            )}
+            {tenants.map(t => (
+              <button
+                key={t.id}
+                data-testid={`tenant-option-${t.slug}`}
+                onClick={() => switchTo(t.id)}
+                className={`flex w-full items-center justify-between px-3 py-2 text-left text-sm hover:bg-zinc-800/50 transition-colors ${
+                  t.id === currentTenant ? "text-indigo-300" : "text-zinc-200"
+                }`}
+              >
+                <div className="flex items-center gap-2 min-w-0">
+                  <Building2 size={12} className="shrink-0 text-zinc-500" />
+                  <div className="min-w-0">
+                    <div className="text-sm truncate">{t.name}</div>
+                    <div className="text-[10px] font-mono text-zinc-500">{t.slug}</div>
+                  </div>
+                </div>
+                {t.id === currentTenant && <Check size={13} className="text-indigo-400 shrink-0" />}
+              </button>
+            ))}
+          </div>
+          <NavLink
+            to="/settings"
+            onClick={() => setOpen(false)}
+            className="block border-t border-zinc-800/70 px-3 py-2 text-[11px] text-indigo-400 hover:bg-zinc-800/40 hover:text-indigo-300 transition-colors"
+          >
+            Manage tenants →
+          </NavLink>
         </div>
       )}
     </div>
@@ -160,6 +268,9 @@ export default function Layout({ children }) {
           </div>
 
           <div className="flex items-center gap-2">
+            {/* Tenant switcher */}
+            <TenantSwitcher user={user} />
+
             {/* Live pill */}
             <div className="flex items-center gap-1.5 rounded-full border border-emerald-500/20 bg-emerald-500/5 px-2 py-1">
               <div className="h-1.5 w-1.5 rounded-full bg-emerald-400" />

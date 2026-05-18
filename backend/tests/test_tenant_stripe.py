@@ -29,7 +29,7 @@ BASE_URL = os.environ.get("REACT_APP_BACKEND_URL").rstrip("/")
 API = f"{BASE_URL}/api"
 
 ADMIN_EMAIL = "parker@cdxi.au"
-ADMIN_PASSWORD = "cdxi2026!"
+ADMIN_PASSWORD = "220191"
 
 MONGO_URL = os.environ.get("MONGO_URL", "mongodb://localhost:27017")
 DB_NAME = os.environ.get("DB_NAME", "test_database")

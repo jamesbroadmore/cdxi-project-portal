@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useCallback } from "react";
 import { api, formatDateTime, formatDate } from "@/lib/api";
 import { toast } from "sonner";
-import { Plus, User, Shield, RefreshCw, Activity, Settings2 } from "lucide-react";
+import { Plus, RefreshCw, Building2, X } from "lucide-react";
 
 const ROLES = ["admin", "account_manager", "viewer"];
 
@@ -80,9 +80,11 @@ export default function Settings() {
   const [users, setUsers] = useState([]);
   const [rateCards, setRateCards] = useState([]);
   const [auditLog, setAuditLog] = useState([]);
+  const [tenants, setTenants] = useState([]);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState("users");
   const [showModal, setShowModal] = useState(false);
+  const [showTenantModal, setShowTenantModal] = useState(false);
 
   // New rate card form
   const [rcForm, setRcForm] = useState({ name: "", currency: "AUD", effective_from: new Date().toISOString().slice(0,10), rates: "{\"hourly\": 150}" });
@@ -91,14 +93,16 @@ export default function Settings() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [uRes, rcRes, auRes] = await Promise.all([
+      const [uRes, rcRes, auRes, tRes] = await Promise.all([
         api.get("/users"),
         api.get("/rate-cards"),
         api.get("/audit-log", { params: { limit: 30 } }),
+        api.get("/tenants"),
       ]);
       setUsers(uRes.data);
       setRateCards(rcRes.data);
       setAuditLog(auRes.data);
+      setTenants(tRes.data);
     } catch { toast.error("Failed to load settings"); }
     finally { setLoading(false); }
   }, []);
@@ -134,14 +138,65 @@ export default function Settings() {
       </div>
 
       <div className="flex gap-1 border-b border-zinc-800">
-        {[{k:"users",l:"Users & Roles"},{k:"rate-cards",l:"Rate Cards"},{k:"audit",l:"Audit Log"}].map(({k,l}) => (
-          <button key={k} onClick={() => setTab(k)}
+        {[
+          {k:"users",l:"Users & Roles"},
+          {k:"tenants",l:"Tenants"},
+          {k:"rate-cards",l:"Rate Cards"},
+          {k:"audit",l:"Audit Log"},
+        ].map(({k,l}) => (
+          <button key={k} data-testid={`settings-tab-${k}`} onClick={() => setTab(k)}
             className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
               tab===k ? "border-indigo-500 text-indigo-300" : "border-transparent text-zinc-500 hover:text-zinc-300"
             }`}>{l}
           </button>
         ))}
       </div>
+
+      {tab === "tenants" && (
+        <div className="space-y-4">
+          <div className="flex justify-between items-center">
+            <div className="text-xs text-zinc-500">
+              Tenants isolate clients, projects, billing, and audit logs.
+              {tenants.length > 0 && <> Currently {tenants.length} tenant{tenants.length !== 1 ? "s" : ""}.</>}
+            </div>
+            <button
+              data-testid="add-tenant-btn"
+              onClick={() => setShowTenantModal(true)}
+              className="flex items-center gap-2 rounded-lg bg-indigo-500 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-600"
+            >
+              <Plus size={14} /> New Tenant
+            </button>
+          </div>
+
+          <div className="rounded-xl border border-zinc-800 bg-zinc-900 overflow-hidden">
+            <div className="hidden lg:grid grid-cols-[2fr_1.5fr_1fr_1fr] gap-4 border-b border-zinc-800 px-5 py-3">
+              {["Name", "Slug", "Status", "Created"].map(h =>
+                <div key={h} className="text-[10px] font-mono uppercase tracking-widest text-zinc-500">{h}</div>
+              )}
+            </div>
+            {tenants.length === 0 && (
+              <div className="py-12 text-center text-xs text-zinc-600">No tenants yet</div>
+            )}
+            {tenants.map(t => (
+              <div key={t.id} data-testid={`tenant-row-${t.slug}`} className="grid grid-cols-1 gap-2 border-b border-zinc-800/50 last:border-0 px-5 py-4 lg:grid-cols-[2fr_1.5fr_1fr_1fr] lg:items-center lg:gap-4">
+                <div className="flex items-center gap-3">
+                  <div className="h-8 w-8 rounded-lg bg-gradient-to-br from-indigo-500/20 to-violet-500/20 border border-indigo-500/30 flex items-center justify-center">
+                    <Building2 size={14} className="text-indigo-300" />
+                  </div>
+                  <span className="text-sm font-medium text-white">{t.name}</span>
+                </div>
+                <div className="font-mono text-xs text-zinc-400">{t.slug}</div>
+                <div>
+                  <span className={`text-xs capitalize ${t.status === "active" ? "text-emerald-400" : "text-zinc-500"}`}>
+                    {t.status}
+                  </span>
+                </div>
+                <div className="text-xs text-zinc-500">{formatDate(t.created_at)}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {tab === "users" && (
         <div className="space-y-4">
@@ -266,6 +321,83 @@ export default function Settings() {
       )}
 
       <NewUserModal open={showModal} onClose={() => setShowModal(false)} onCreated={u => setUsers(prev => [...prev, u])} />
+      <NewTenantModal
+        open={showTenantModal}
+        onClose={() => setShowTenantModal(false)}
+        onCreated={t => setTenants(prev => [...prev, t])}
+      />
+    </div>
+  );
+}
+
+function NewTenantModal({ open, onClose, onCreated }) {
+  const [form, setForm] = useState({ name: "", slug: "" });
+  const [loading, setLoading] = useState(false);
+  if (!open) return null;
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setLoading(true);
+    try {
+      const payload = { name: form.name.trim() };
+      if (form.slug.trim()) payload.slug = form.slug.trim();
+      const { data } = await api.post("/tenants", payload);
+      toast.success(`Tenant "${data.name}" created`);
+      onCreated(data);
+      onClose();
+      setForm({ name: "", slug: "" });
+    } catch (err) {
+      toast.error(err?.response?.data?.detail || "Failed to create tenant");
+    } finally { setLoading(false); }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={onClose}>
+      <div className="w-full max-w-md rounded-xl border border-zinc-800 bg-zinc-900 p-6 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-sm font-semibold text-white flex items-center gap-2">
+            <Building2 size={14} className="text-indigo-400" /> New Tenant
+          </h3>
+          <button onClick={onClose} className="text-zinc-500 hover:text-white"><X size={16} /></button>
+        </div>
+        <form onSubmit={submit} className="space-y-3">
+          <div>
+            <label className="block text-xs text-zinc-400 mb-1">Tenant Name *</label>
+            <input
+              required autoFocus
+              data-testid="new-tenant-name-input"
+              value={form.name}
+              onChange={e => setForm({ ...form, name: e.target.value })}
+              placeholder="e.g. Cosmic Brand Portal"
+              className="w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-white placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-500/50"
+            />
+          </div>
+          <div>
+            <label className="block text-xs text-zinc-400 mb-1">Slug (optional)</label>
+            <input
+              value={form.slug}
+              onChange={e => setForm({ ...form, slug: e.target.value })}
+              placeholder="auto-generated from name"
+              className="w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-white font-mono placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-500/50"
+            />
+            <div className="mt-1 text-[10px] text-zinc-600">URL-safe identifier. Will be auto-derived if left blank.</div>
+          </div>
+          <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-[11px] text-amber-300">
+            New tenants start empty. Admin users can switch into them from the header pill, then create clients/projects scoped to that tenant.
+          </div>
+          <div className="flex justify-end gap-2 pt-2">
+            <button type="button" onClick={onClose} className="rounded-lg px-4 py-2 text-sm text-zinc-400 hover:text-white hover:bg-zinc-800">Cancel</button>
+            <button
+              type="submit"
+              data-testid="new-tenant-submit-btn"
+              disabled={loading || !form.name.trim()}
+              className="rounded-lg bg-indigo-500 px-4 py-2 text-sm text-white font-medium hover:bg-indigo-600 disabled:opacity-50"
+            >
+              {loading ? "Creating…" : "Create Tenant"}
+            </button>
+          </div>
+        </form>
+      </div>
     </div>
   );
 }
