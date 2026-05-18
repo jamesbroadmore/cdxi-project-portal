@@ -207,6 +207,7 @@ async def run_agent_task(
     context: Dict[str, Any],
     db,
     actor_id: Optional[str] = None,
+    tenant_id: str = "default",
 ) -> Dict[str, Any]:
     """Execute an AI agent task and persist the result."""
     if not EMERGENT_LLM_KEY:
@@ -224,6 +225,7 @@ async def run_agent_task(
         "escalation_flag": False,
         "human_reviewed": False,
         "actor_id": actor_id,
+        "tenant_id": tenant_id,
         "started_at": datetime.now(timezone.utc).isoformat(),
         "created_at": datetime.now(timezone.utc).isoformat(),
     }

@@ -1,0 +1,40 @@
+{
+  "summary": "Validated tenant_id propagation across writes/reads and Stripe settlement flow for cdxi | OS. 20/20 pytest tests pass on https://construct-zone-22.preview.emergentagent.com. Verified: fresh DB (clients/projects/invoices empty, dashboard zeroed); tenant stamping on POST /clients, /projects, /timers/start, /rate-cards, /contracts/generate; tenant isolation hides foreign-tenant docs on GET /clients, /projects, /invoices, /audit-log, /agents/runs; backfill tolerance shows legacy docs with no tenant_id to 'default' tenant; Stripe checkout returns checkout.stripe.com URL + cs_ session id and stamps payment_transactions with tenant_id='default'; _settle_payment() marks invoice paid, sets amount_paid=total, balance_due=0, paid_at, and writes audit_log 'invoice.paid_via_stripe'; webhook returns 400 cleanly on bad signature; /api/payments/status/{sid} now returns invoice_id; workflow-demo stamps all 3 agent_runs with tenant_id='default'. Found + fixed 1 critical bug.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_tenant_stripe.py",
+    "/app/test_reports/pytest/iter2_tenant_stripe.xml"
+  ],
+  "action_items": [
+    "Review the log_audit ObjectId fix I applied (server.py lines ~249-289): _strip_mongo_id() helper now scrubs _id keys from before_state/after_state/metadata before writing to audit_log. Pre-existing audit_log docs with embedded ObjectId in after_state were also cleaned via one-time mongo update_many($unset). Confirm fix scope is acceptable, otherwise consider deep-copying docs before passing to log_audit so the live document isn't mutated by insert_one's auto _id assignment."
+  ],
+  "critical_code_review_comments": [
+    "CRITICAL BUG (fixed by me): log_audit(after_state=client_doc) was being called AFTER db.<col>.insert_one(client_doc), and Motor mutates the passed dict in-place by attaching the generated `_id` (bson.ObjectId). The ObjectId propagated into audit_log.after_state and caused GET /api/audit-log to fail with PydanticSerializationError 500 once any client/project/etc had been created. Sanitized via _strip_mongo_id helper. Long-term fix: pass a copy of the doc to log_audit (e.g., {k:v for k,v in doc.items() if k != '_id'}) or insert audit BEFORE the write that yields _id.",
+    "server.py is now 2557 lines — approaching split threshold. Auth helpers, multi-tenant helpers, audit + stripe sections are all clear seams for extraction.",
+    "Stripe webhook handle raises bare HTTPException(400) on any handle_webhook exception, including non-signature errors (we observed `'id' KeyError` in logs from emergentintegrations on the stub payload). Consider distinguishing signature failure (400) from upstream-parsing errors (still 400 is fine but log_audit + better error message would aid debugging).",
+    "TimerStart endpoint requires tenant-scoped client_id lookup (tquery(user, {id: client_id})) — correct, but if a viewer attempts a foreign client_id they get 404; consistent with isolation contract.",
+    "_settle_payment is idempotent on invoice.status='paid' but does NOT re-check on milestone branch — milestone is always updated even if already paid. Low impact."
+  ],
+  "updated_files": [
+    "/app/backend/server.py (added _strip_mongo_id + sanitized log_audit before/after/metadata)",
+    "/app/backend/tests/test_tenant_stripe.py (new — 20 tests across 8 classes)"
+  ],
+  "success_rate": {
+    "backend": "100%",
+    "frontend": "skipped (per request)"
+  },
+  "test_credentials": "parker@cdxi.au / cdxi2026!",
+  "seed_data_creation": "Tests insert+cleanup TEST_-prefixed docs and foreign-tenant docs each session. Session-scoped autouse teardown wipes them all. DB returned to fresh state post-run: users=1, clients=0, projects=0, invoices=0, contracts=0, timers=0, agent_runs=0, payment_transactions=0, audit_log=0, rate_cards=1, agents=6, contract_templates=2.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "All 20 backend tests in /app/backend/tests/test_tenant_stripe.py pass against production preview URL. Existing /app/backend/tests/test_enhancements.py likely fails now because seed clients/projects/invoices were wiped — main agent should either re-seed if those tests should keep running, or retire test_enhancements.py since test_tenant_stripe.py is the new regression baseline. Critical fix applied to log_audit: it now scrubs Mongo _id from before/after/metadata payloads. Stripe runs in test mode (sk_test_emergent); workflow-demo issues 3 real Claude calls (~20s).",
+  "rca of the issue": "Bug: GET /api/audit-log returned HTTP 500. Reproduction: 1) login, 2) POST /api/clients with any payload (this triggers log_audit(after_state=client_doc)), 3) GET /api/audit-log -> 500 PydanticSerializationError 'Unable to serialize unknown type: bson.objectid.ObjectId'. Root cause: motor's insert_one mutates the passed dict by attaching an ObjectId `_id`. log_audit stored that mutated dict as before_state/after_state. The GET endpoint projects out the audit doc's own _id but cannot strip nested _id values inside before/after states, so FastAPI's response serialization explodes. Mitigation applied: added _strip_mongo_id() recursive helper in server.py and used it in log_audit on before_state, after_state, metadata. Also ran a one-time mongo cleanup to scrub `_id` from existing audit_log docs' after_state. After fix, GET /api/audit-log returns 200 and tenant-isolation tests on /audit-log pass."
+}

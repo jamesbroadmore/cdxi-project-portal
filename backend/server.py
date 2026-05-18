@@ -246,6 +246,15 @@ def tdoc(user: dict, doc: dict) -> dict:
 # Audit helper
 # ---------------------------------------------------------------------------
 
+def _strip_mongo_id(value):
+    """Recursively remove BSON _id keys so audit payloads stay JSON-serializable."""
+    if isinstance(value, dict):
+        return {k: _strip_mongo_id(v) for k, v in value.items() if k != "_id"}
+    if isinstance(value, list):
+        return [_strip_mongo_id(v) for v in value]
+    return value
+
+
 async def log_audit(
     event_name: str,
     object_type: str,
@@ -255,6 +264,7 @@ async def log_audit(
     before_state: Optional[dict] = None,
     after_state: Optional[dict] = None,
     metadata: Optional[dict] = None,
+    tenant_id: Optional[str] = None,
 ) -> None:
     try:
         await db.audit_log.insert_one({
@@ -264,9 +274,10 @@ async def log_audit(
             "event_name": event_name,
             "object_type": object_type,
             "object_id": object_id,
-            "before_state": before_state,
-            "after_state": after_state,
-            "metadata": metadata or {},
+            "before_state": _strip_mongo_id(before_state),
+            "after_state": _strip_mongo_id(after_state),
+            "metadata": _strip_mongo_id(metadata) or {},
+            "tenant_id": tenant_id or DEFAULT_TENANT,
             "occurred_at": datetime.now(timezone.utc).isoformat(),
         })
     except Exception as exc:
@@ -703,12 +714,12 @@ async def logout(user: dict = Depends(get_current_user)) -> dict:
 
 @api.get("/kpis")
 async def kpis(user: dict = Depends(get_current_user)) -> dict:
-    projects = await db.projects.find({}, {"_id": 0, "id": 1}).to_list(None)
+    projects = await db.projects.find(tquery(user), {"_id": 0, "id": 1}).to_list(None)
     project_ids = [p["id"] for p in projects]
 
-    total_clients = await db.clients.count_documents({})
-    active_clients = await db.clients.count_documents({"status": "active"})
-    at_risk_clients = await db.clients.count_documents({"status": "at_risk"})
+    total_clients = await db.clients.count_documents(tquery(user))
+    active_clients = await db.clients.count_documents(tquery(user, {"status": "active"}))
+    at_risk_clients = await db.clients.count_documents(tquery(user, {"status": "at_risk"}))
 
     if not project_ids:
         return {
@@ -751,14 +762,14 @@ async def kpis(user: dict = Depends(get_current_user)) -> dict:
 
     # Add unpaid usage events to revenue pipeline
     uninvoiced = await db.usage_events.find(
-        {"invoice_id": {"$exists": False}, "voided_at": {"$exists": False}},
+        tquery(user, {"invoice_id": {"$exists": False}, "voided_at": {"$exists": False}}),
         {"_id": 0, "billable_amount": 1}
     ).to_list(None)
     for ue in uninvoiced:
         revenue_pipeline += float(ue.get("billable_amount") or 0)
 
-    pending_reviews = await db.agent_runs.count_documents({"execution_status": "escalated", "human_reviewed": False})
-    active_timers = await db.timers.count_documents({"status": "running"})
+    pending_reviews = await db.agent_runs.count_documents(tquery(user, {"execution_status": "escalated", "human_reviewed": False}))
+    active_timers = await db.timers.count_documents(tquery(user, {"status": "running"}))
 
     return {
         "active_projects": active,
@@ -778,16 +789,16 @@ async def dashboard(user: dict = Depends(get_current_user)) -> dict:
 
     # Recent audit log
     recent_events = await db.audit_log.find(
-        {}, {"_id": 0}
+        tquery(user), {"_id": 0}
     ).sort("occurred_at", -1).limit(10).to_list(None)
 
     # Recent agent runs
     recent_runs = await db.agent_runs.find(
-        {}, {"_id": 0}
+        tquery(user), {"_id": 0}
     ).sort("started_at", -1).limit(5).to_list(None)
 
     # Client health distribution
-    clients = await db.clients.find({}, {"_id": 0, "health_score": 1, "status": 1}).to_list(None)
+    clients = await db.clients.find(tquery(user), {"_id": 0, "health_score": 1, "status": 1}).to_list(None)
     health_buckets = {"healthy": 0, "moderate": 0, "at_risk": 0}
     for c in clients:
         hs = float(c.get("health_score") or 100)
@@ -800,7 +811,7 @@ async def dashboard(user: dict = Depends(get_current_user)) -> dict:
 
     # Recent invoices
     recent_invoices = await db.invoices.find(
-        {}, {"_id": 0}
+        tquery(user), {"_id": 0}
     ).sort("created_at", -1).limit(5).to_list(None)
 
     return {
@@ -830,7 +841,7 @@ async def list_clients(
         query["lifecycle_stage"] = lifecycle_stage
     if billing_model:
         query["billing_model"] = billing_model
-    clients = await db.clients.find(query, {"_id": 0}).sort("created_at", -1).to_list(None)
+    clients = await db.clients.find(tquery(user, query), {"_id": 0}).sort("created_at", -1).to_list(None)
     return await _batch_attach_projects(clients)
 
 
@@ -838,7 +849,7 @@ async def list_clients(
 async def create_client(body: ClientCreate, user: dict = Depends(get_current_user)) -> dict:
     cid = str(uuid.uuid4())
     now = datetime.now(timezone.utc).isoformat()
-    client_doc = {
+    client_doc = tdoc(user, {
         "id": cid,
         "name": body.name.strip(),
         "trading_name": body.trading_name,
@@ -856,13 +867,13 @@ async def create_client(body: ClientCreate, user: dict = Depends(get_current_use
         "created_by": user["id"],
         "created_at": now,
         "updated_at": now,
-    }
+    })
     await db.clients.insert_one(client_doc)
 
     # Create initial project if project_name provided (backward compat)
     if body.project_name:
         pid = str(uuid.uuid4())
-        await db.projects.insert_one({
+        await db.projects.insert_one(tdoc(user, {
             "id": pid,
             "client_id": cid,
             "name": body.project_name.strip(),
@@ -874,7 +885,7 @@ async def create_client(body: ClientCreate, user: dict = Depends(get_current_use
             "created_by": user["id"],
             "created_at": now,
             "updated_at": now,
-        })
+        }))
 
     await log_audit("client.created", "client", cid, actor_id=user["id"], after_state=client_doc)
     c = await db.clients.find_one({"id": cid}, {"_id": 0})
@@ -1094,7 +1105,7 @@ async def list_projects(
         query["client_id"] = client_id
     if status_filter:
         query["status"] = status_filter
-    projects = await db.projects.find(query, {"_id": 0}).sort("created_at", -1).to_list(None)
+    projects = await db.projects.find(tquery(user, query), {"_id": 0}).sort("created_at", -1).to_list(None)
     result = []
     for p in projects:
         enriched = await _attach_milestones(p)
@@ -1107,12 +1118,12 @@ async def list_projects(
 
 @api.post("/projects", status_code=status.HTTP_201_CREATED)
 async def create_project(body: ProjectCreate, user: dict = Depends(get_current_user)) -> dict:
-    c = await db.clients.find_one({"id": body.client_id})
+    c = await db.clients.find_one(tquery(user, {"id": body.client_id}))
     if not c:
         raise HTTPException(status_code=404, detail="Client not found")
     pid = str(uuid.uuid4())
     now = datetime.now(timezone.utc).isoformat()
-    doc = {
+    doc = tdoc(user, {
         "id": pid,
         "client_id": body.client_id,
         "owner_id": body.owner_id or user["id"],
@@ -1130,7 +1141,7 @@ async def create_project(body: ProjectCreate, user: dict = Depends(get_current_u
         "created_by": user["id"],
         "created_at": now,
         "updated_at": now,
-    }
+    })
     await db.projects.insert_one(doc)
     await log_audit("project.created", "project", pid, actor_id=user["id"], after_state=doc)
     p = await db.projects.find_one({"id": pid}, {"_id": 0})
@@ -1331,13 +1342,13 @@ async def update_change_request(
 
 @api.get("/rate-cards")
 async def list_rate_cards(user: dict = Depends(get_current_user)) -> list[dict]:
-    return await db.rate_cards.find({}, {"_id": 0}).sort("created_at", -1).to_list(None)
+    return await db.rate_cards.find(tquery(user), {"_id": 0}).sort("created_at", -1).to_list(None)
 
 
 @api.post("/rate-cards", status_code=status.HTTP_201_CREATED)
 async def create_rate_card(body: RateCardCreate, user: dict = Depends(get_current_user)) -> dict:
     rcid = str(uuid.uuid4())
-    doc = {
+    doc = tdoc(user, {
         "id": rcid,
         "client_id": body.client_id,
         "name": body.name,
@@ -1349,9 +1360,9 @@ async def create_rate_card(body: RateCardCreate, user: dict = Depends(get_curren
         "is_default": body.is_default,
         "created_by": user["id"],
         "created_at": datetime.now(timezone.utc).isoformat(),
-    }
+    })
     if body.is_default:
-        await db.rate_cards.update_many({"is_default": True, "client_id": None}, {"$set": {"is_default": False}})
+        await db.rate_cards.update_many(tquery(user, {"is_default": True, "client_id": None}), {"$set": {"is_default": False}})
     await db.rate_cards.insert_one(doc)
     return await db.rate_cards.find_one({"id": rcid}, {"_id": 0})
 
@@ -1389,7 +1400,7 @@ async def list_timers(
         query["client_id"] = client_id
     if status_filter:
         query["status"] = status_filter
-    timers = await db.timers.find(query, {"_id": 0}).sort("started_at", -1).limit(100).to_list(None)
+    timers = await db.timers.find(tquery(user, query), {"_id": 0}).sort("started_at", -1).limit(100).to_list(None)
     # Enrich with client name
     result = []
     for t in timers:
@@ -1404,7 +1415,7 @@ async def list_timers(
 
 @api.get("/timers/active")
 async def list_active_timers(user: dict = Depends(get_current_user)) -> list[dict]:
-    timers = await db.timers.find({"status": "running"}, {"_id": 0}).to_list(None)
+    timers = await db.timers.find(tquery(user, {"status": "running"}), {"_id": 0}).to_list(None)
     result = []
     for t in timers:
         c = await db.clients.find_one({"id": t["client_id"]}, {"_id": 0, "name": 1})
@@ -1417,17 +1428,17 @@ async def list_active_timers(user: dict = Depends(get_current_user)) -> list[dic
 
 @api.post("/timers/start", status_code=status.HTTP_201_CREATED)
 async def start_timer(body: TimerStart, user: dict = Depends(get_current_user)) -> dict:
-    c = await db.clients.find_one({"id": body.client_id})
+    c = await db.clients.find_one(tquery(user, {"id": body.client_id}))
     if not c:
         raise HTTPException(status_code=404, detail="Client not found")
     # Check for already running timer for this user+client
     existing = await db.timers.find_one({"user_id": user["id"], "status": "running"})
     if existing:
         raise HTTPException(status_code=400, detail="You already have a running timer. Stop it first.")
-    tid = str(uuid.uuid4())
+    tid_ = str(uuid.uuid4())
     now = datetime.now(timezone.utc).isoformat()
-    doc = {
-        "id": tid,
+    doc = tdoc(user, {
+        "id": tid_,
         "user_id": user["id"],
         "client_id": body.client_id,
         "project_id": body.project_id,
@@ -1440,10 +1451,10 @@ async def start_timer(body: TimerStart, user: dict = Depends(get_current_user)) 
         "source": "manual",
         "status": "running",
         "created_at": now,
-    }
+    })
     await db.timers.insert_one(doc)
-    await log_audit("timer.started", "timer", tid, actor_id=user["id"])
-    t = await db.timers.find_one({"id": tid}, {"_id": 0})
+    await log_audit("timer.started", "timer", tid_, actor_id=user["id"])
+    t = await db.timers.find_one({"id": tid_}, {"_id": 0})
     t["client_name"] = c["name"]
     return t
 
@@ -1483,7 +1494,7 @@ async def stop_timer(timer_id: str, user: dict = Depends(get_current_user)) -> d
     billable_amount = round(duration_hours * hourly_rate, 2) if t.get("is_billable") else 0.0
 
     ue_id = str(uuid.uuid4())
-    ue_doc = {
+    ue_doc = tdoc(user, {
         "id": ue_id,
         "client_id": t["client_id"],
         "project_id": t.get("project_id"),
@@ -1500,7 +1511,7 @@ async def stop_timer(timer_id: str, user: dict = Depends(get_current_user)) -> d
         "description": t.get("description"),
         "occurred_at": stopped_at.isoformat(),
         "created_at": stopped_at.isoformat(),
-    }
+    })
     await db.usage_events.insert_one(ue_doc)
     await log_audit("timer.stopped", "timer", timer_id, actor_id=user["id"])
 
@@ -1518,7 +1529,7 @@ async def list_usage_events(
     query: dict = {}
     if client_id:
         query["client_id"] = client_id
-    events = await db.usage_events.find(query, {"_id": 0}).sort("occurred_at", -1).limit(200).to_list(None)
+    events = await db.usage_events.find(tquery(user, query), {"_id": 0}).sort("occurred_at", -1).limit(200).to_list(None)
     result = []
     for e in events:
         c = await db.clients.find_one({"id": e["client_id"]}, {"_id": 0, "name": 1})
@@ -1540,7 +1551,7 @@ async def list_invoices(
         query["client_id"] = client_id
     if inv_status:
         query["status"] = inv_status
-    invoices = await db.invoices.find(query, {"_id": 0}).sort("created_at", -1).to_list(None)
+    invoices = await db.invoices.find(tquery(user, query), {"_id": 0}).sort("created_at", -1).to_list(None)
     result = []
     for inv in invoices:
         c = await db.clients.find_one({"id": inv["client_id"]}, {"_id": 0, "name": 1})
@@ -1561,17 +1572,17 @@ async def get_invoice(invoice_id: str, user: dict = Depends(get_current_user)) -
 
 @api.post("/invoices/generate", status_code=status.HTTP_201_CREATED)
 async def generate_invoice(body: InvoiceGenerate, user: dict = Depends(get_current_user)) -> dict:
-    c = await db.clients.find_one({"id": body.client_id})
+    c = await db.clients.find_one(tquery(user, {"id": body.client_id}))
     if not c:
         raise HTTPException(status_code=404, detail="Client not found")
 
     # Get unbilled usage events in period
-    usage_events = await db.usage_events.find({
+    usage_events = await db.usage_events.find(tquery(user, {
         "client_id": body.client_id,
         "invoice_id": {"$exists": False},
         "voided_at": {"$exists": False},
         "occurred_at": {"$gte": body.period_start, "$lte": body.period_end + "T23:59:59Z"},
-    }, {"_id": 0}).to_list(None)
+    }), {"_id": 0}).to_list(None)
 
     line_items = []
     subtotal = 0.0
@@ -1598,7 +1609,7 @@ async def generate_invoice(body: InvoiceGenerate, user: dict = Depends(get_curre
     now = datetime.now(timezone.utc).isoformat()
     due_date = body.due_date or (date.today() + timedelta(days=30)).isoformat()
 
-    inv_doc = {
+    inv_doc = tdoc(user, {
         "id": str(uuid.uuid4()),
         "client_id": body.client_id,
         "invoice_number": inv_number,
@@ -1618,7 +1629,7 @@ async def generate_invoice(body: InvoiceGenerate, user: dict = Depends(get_curre
         "created_by": user["id"],
         "created_at": now,
         "updated_at": now,
-    }
+    })
     await db.invoices.insert_one(inv_doc)
 
     # Mark usage events as invoiced
@@ -1692,7 +1703,7 @@ async def invoice_checkout(
         metadata={"invoice_id": invoice_id, "invoice_number": inv["invoice_number"]},
     )
     session = await stripe_checkout.create_checkout_session(req)
-    await db.payment_transactions.insert_one({
+    await db.payment_transactions.insert_one(tdoc(user, {
         "id": str(uuid.uuid4()),
         "session_id": session.session_id,
         "invoice_id": invoice_id,
@@ -1704,7 +1715,7 @@ async def invoice_checkout(
         "status": "open",
         "metadata": {"invoice_id": invoice_id, "client_name": client_name},
         "created_at": datetime.now(timezone.utc).isoformat(),
-    })
+    }))
     await log_audit("invoice.checkout_created", "invoice", invoice_id, actor_id=user["id"])
     return {"url": session.url, "session_id": session.session_id}
 
@@ -1760,7 +1771,7 @@ async def list_contracts(
     query: dict = {}
     if client_id:
         query["client_id"] = client_id
-    contracts = await db.contracts.find(query, {"_id": 0}).sort("created_at", -1).to_list(None)
+    contracts = await db.contracts.find(tquery(user, query), {"_id": 0}).sort("created_at", -1).to_list(None)
     result = []
     for con in contracts:
         c = await db.clients.find_one({"id": con["client_id"]}, {"_id": 0, "name": 1})
@@ -1783,7 +1794,7 @@ async def get_contract(contract_id: str, user: dict = Depends(get_current_user))
 async def generate_contract(
     body: ContractGenerate, user: dict = Depends(get_current_user)
 ) -> dict:
-    c = await db.clients.find_one({"id": body.client_id})
+    c = await db.clients.find_one(tquery(user, {"id": body.client_id}))
     if not c:
         raise HTTPException(status_code=404, detail="Client not found")
     tmpl = await db.contract_templates.find_one({"id": body.template_id})
@@ -1800,7 +1811,7 @@ async def generate_contract(
 
     con_number = _next_contract_number()
     now = datetime.now(timezone.utc).isoformat()
-    con_doc = {
+    con_doc = tdoc(user, {
         "id": str(uuid.uuid4()),
         "client_id": body.client_id,
         "template_id": body.template_id,
@@ -1816,7 +1827,7 @@ async def generate_contract(
         "created_by": user["id"],
         "created_at": now,
         "updated_at": now,
-    }
+    })
     await db.contracts.insert_one(con_doc)
     await log_audit("contract.generated", "contract", con_doc["id"], actor_id=user["id"])
     result = await db.contracts.find_one({"id": con_doc["id"]}, {"_id": 0})
@@ -1936,6 +1947,7 @@ async def trigger_agent_run(
             context=body.context,
             db=db,
             actor_id=user["id"],
+            tenant_id=tid(user),
         )
         return result
     except Exception as exc:
@@ -1954,13 +1966,13 @@ async def list_agent_runs(
         query["agent_type"] = agent_type
     if exec_status:
         query["execution_status"] = exec_status
-    return await db.agent_runs.find(query, {"_id": 0}).sort("started_at", -1).limit(50).to_list(None)
+    return await db.agent_runs.find(tquery(user, query), {"_id": 0}).sort("started_at", -1).limit(50).to_list(None)
 
 
 @api.get("/agents/review-queue")
 async def get_review_queue(user: dict = Depends(get_current_user)) -> list[dict]:
     return await db.agent_runs.find(
-        {"execution_status": "escalated", "human_reviewed": False}, {"_id": 0}
+        tquery(user, {"execution_status": "escalated", "human_reviewed": False}), {"_id": 0}
     ).sort("started_at", -1).to_list(None)
 
 
@@ -2013,12 +2025,12 @@ async def run_workflow_demo(user: dict = Depends(get_current_user)) -> dict:
 
     # 1. Find an overdue/sent invoice (or fall back to most recent)
     invoice = await db.invoices.find_one(
-        {"status": {"$in": ["overdue", "sent"]}},
+        tquery(user, {"status": {"$in": ["overdue", "sent"]}}),
         {"_id": 0},
         sort=[("due_date", 1)],
     )
     if not invoice:
-        invoice = await db.invoices.find_one({}, {"_id": 0}, sort=[("created_at", -1)])
+        invoice = await db.invoices.find_one(tquery(user), {"_id": 0}, sort=[("created_at", -1)])
     if not invoice:
         # Fabricate a demo invoice context if none exists
         invoice = {
@@ -2034,9 +2046,9 @@ async def run_workflow_demo(user: dict = Depends(get_current_user)) -> dict:
 
     client = None
     if invoice.get("client_id"):
-        client = await db.clients.find_one({"id": invoice["client_id"]}, {"_id": 0})
+        client = await db.clients.find_one(tquery(user, {"id": invoice["client_id"]}), {"_id": 0})
     if not client:
-        client = await db.clients.find_one({}, {"_id": 0}, sort=[("health_score", 1)])
+        client = await db.clients.find_one(tquery(user), {"_id": 0}, sort=[("health_score", 1)])
     if not client:
         client = {"id": "demo-client", "name": "Acme Studios", "health_score": 62, "lifecycle_stage": "active"}
 
@@ -2072,6 +2084,7 @@ async def run_workflow_demo(user: dict = Depends(get_current_user)) -> dict:
         context=base_context,
         db=db,
         actor_id=user["id"],
+        tenant_id=tid(user),
     )
     steps.append({
         "step": 1,
@@ -2089,6 +2102,7 @@ async def run_workflow_demo(user: dict = Depends(get_current_user)) -> dict:
         context=fin_context,
         db=db,
         actor_id=user["id"],
+        tenant_id=tid(user),
     )
     steps.append({
         "step": 2,
@@ -2110,6 +2124,7 @@ async def run_workflow_demo(user: dict = Depends(get_current_user)) -> dict:
         context=cs_context,
         db=db,
         actor_id=user["id"],
+        tenant_id=tid(user),
     )
     steps.append({
         "step": 3,
@@ -2197,7 +2212,7 @@ async def get_audit_log(
     if object_type:
         query["object_type"] = object_type
     return await db.audit_log.find(
-        query, {"_id": 0}
+        tquery(user, query), {"_id": 0}
     ).sort("occurred_at", -1).limit(limit).to_list(None)
 
 
@@ -2238,7 +2253,7 @@ async def create_checkout(
         metadata={"milestone_id": milestone_id, "project_id": milestone["project_id"]},
     )
     session = await stripe_checkout.create_checkout_session(req)
-    await db.payment_transactions.insert_one({
+    await db.payment_transactions.insert_one(tdoc(user, {
         "id": str(uuid.uuid4()),
         "session_id": session.session_id,
         "milestone_id": milestone_id,
@@ -2247,7 +2262,7 @@ async def create_checkout(
         "payment_status": "initiated", "status": "open",
         "metadata": {"milestone_id": milestone_id, "project_id": milestone["project_id"]},
         "created_at": datetime.now(timezone.utc).isoformat(),
-    })
+    }))
     return {"url": session.url, "session_id": session.session_id}
 
 
@@ -2261,7 +2276,8 @@ async def payment_status(
     if not STRIPE_AVAILABLE:
         return {"session_id": session_id, "payment_status": tx.get("payment_status", "pending"),
                 "status": tx.get("status", "open"),
-                "amount_total": int(float(tx.get("amount") or 0) * 100), "currency": tx.get("currency", "usd")}
+                "amount_total": int(float(tx.get("amount") or 0) * 100), "currency": tx.get("currency", "usd"),
+                "invoice_id": tx.get("invoice_id"), "milestone_id": tx.get("milestone_id")}
     stripe_checkout = StripeCheckout(api_key=STRIPE_API_KEY, webhook_url=_webhook_url(request))
     try:
         live = await stripe_checkout.get_checkout_status(session_id)
@@ -2271,18 +2287,47 @@ async def payment_status(
     if live is None:
         return {"session_id": session_id, "payment_status": tx.get("payment_status", "pending"),
                 "status": tx.get("status", "open"),
-                "amount_total": int(float(tx.get("amount") or 0) * 100), "currency": tx.get("currency", "usd")}
+                "amount_total": int(float(tx.get("amount") or 0) * 100), "currency": tx.get("currency", "usd"),
+                "invoice_id": tx.get("invoice_id"), "milestone_id": tx.get("milestone_id")}
     if tx.get("payment_status") != "paid":
         await db.payment_transactions.update_one(
             {"session_id": session_id},
             {"$set": {"payment_status": live.payment_status, "status": live.status}},
         )
         if live.payment_status == "paid":
-            await db.milestones.update_one(
-                {"id": tx["milestone_id"]}, {"$set": {"payment_status": "paid"}}
-            )
+            await _settle_payment(tx, user_id=user.get("id"))
     return {"session_id": session_id, "payment_status": live.payment_status,
-            "status": live.status, "amount_total": live.amount_total, "currency": live.currency}
+            "status": live.status, "amount_total": live.amount_total, "currency": live.currency,
+            "invoice_id": tx.get("invoice_id"), "milestone_id": tx.get("milestone_id")}
+
+
+async def _settle_payment(tx: dict, user_id: Optional[str] = None) -> None:
+    """Mark the invoice or milestone associated with a payment_transaction as paid."""
+    now = datetime.now(timezone.utc).isoformat()
+    if tx.get("invoice_id"):
+        inv = await db.invoices.find_one({"id": tx["invoice_id"]}, {"_id": 0})
+        if inv and inv.get("status") != "paid":
+            total = float(inv.get("total_amount") or 0)
+            await db.invoices.update_one(
+                {"id": tx["invoice_id"]},
+                {"$set": {
+                    "status": "paid",
+                    "amount_paid": total,
+                    "balance_due": 0.0,
+                    "paid_at": now,
+                    "updated_at": now,
+                }},
+            )
+            await log_audit(
+                "invoice.paid_via_stripe", "invoice", tx["invoice_id"],
+                actor_id=user_id, actor_type="stripe_webhook" if user_id is None else "user",
+                tenant_id=inv.get("tenant_id") or DEFAULT_TENANT,
+                metadata={"session_id": tx.get("session_id"), "amount": tx.get("amount")},
+            )
+    if tx.get("milestone_id"):
+        await db.milestones.update_one(
+            {"id": tx["milestone_id"]}, {"$set": {"payment_status": "paid"}}
+        )
 
 
 @api.post("/webhook/stripe")
@@ -2304,9 +2349,7 @@ async def stripe_webhook(request: Request) -> dict:
                 {"session_id": evt.session_id},
                 {"$set": {"payment_status": "paid", "status": "complete"}},
             )
-            await db.milestones.update_one(
-                {"id": tx["milestone_id"]}, {"$set": {"payment_status": "paid"}}
-            )
+            await _settle_payment(tx)
     return {"received": True}
 
 

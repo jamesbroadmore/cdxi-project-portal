@@ -35,6 +35,7 @@ function CdxiLogo({ collapsed }) {
         <div className="flex items-baseline gap-0">
           {/* Main wordmark */}
           <span
+            data-cdxi-logo
             className="text-[26px] leading-none tracking-tight"
             style={{
               fontFamily: "'Righteous', cursive",
