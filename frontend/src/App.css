@@ -1,39 +1,139 @@
-.App {
-    min-height: 100vh;
+/* ============================================================
+   cdxi | OS — Cinematic Theme System
+   ============================================================
+   Design tokens, ambient backgrounds, micro-animations.
+   Compatible with the existing Tailwind class names — additive,
+   non-breaking.
+   ============================================================ */
+
+:root {
+    /* ─── Core palette ─── */
+    --cdxi-bg:           #08090f;
+    --cdxi-bg-elevated:  #0e1018;
+    --cdxi-card:         #11131c;
+    --cdxi-card-hover:   #161824;
+    --cdxi-border:       #1f2230;
+    --cdxi-border-soft:  rgba(255, 255, 255, 0.06);
+    --cdxi-text:         #f1f5f9;
+    --cdxi-text-soft:    #94a3b8;
+    --cdxi-muted:        #64748b;
+
+    /* ─── Accent gradients ─── */
+    --cdxi-indigo:  #6366f1;
+    --cdxi-violet:  #a78bfa;
+    --cdxi-emerald: #34d399;
+    --cdxi-amber:   #fbbf24;
+    --cdxi-rose:    #fb7185;
+    --cdxi-cyan:    #22d3ee;
+
+    /* ─── Glow & shadow ─── */
+    --cdxi-glow-indigo:  0 0 40px rgba(99,102,241,0.18);
+    --cdxi-glow-emerald: 0 0 30px rgba(52,211,153,0.18);
+    --cdxi-card-shadow:  0 8px 24px -8px rgba(0,0,0,0.4), 0 1px 0 rgba(255,255,255,0.04) inset;
+
+    /* ─── Motion ─── */
+    --cdxi-ease: cubic-bezier(0.22, 1, 0.36, 1);
 }
 
-/* ============================================================
-   Theme transition
-   ============================================================ */
-*, *::before, *::after {
-    transition:
-        background-color 0.2s ease,
-        border-color 0.2s ease,
-        color 0.15s ease;
-}
-
-/* ============================================================
-   Light mode overrides  (data-theme="light" on <html>)
-   ============================================================ */
 [data-theme="light"] {
+    --cdxi-bg:           #f6f7fb;
+    --cdxi-bg-elevated:  #ffffff;
+    --cdxi-card:         #ffffff;
+    --cdxi-card-hover:   #f8fafc;
+    --cdxi-border:       #e2e8f0;
+    --cdxi-border-soft:  rgba(15,23,42,0.06);
+    --cdxi-text:         #0f172a;
+    --cdxi-text-soft:    #475569;
+    --cdxi-muted:        #94a3b8;
+    --cdxi-glow-indigo:  0 0 30px rgba(99,102,241,0.10);
+    --cdxi-glow-emerald: 0 0 24px rgba(16,185,129,0.10);
+    --cdxi-card-shadow:  0 8px 24px -12px rgba(15,23,42,0.12), 0 1px 0 rgba(255,255,255,0.6) inset;
     color-scheme: light;
 }
 
-/* backgrounds */
-[data-theme="light"] .bg-zinc-950 { background-color: #f0f2f5 !important; }
-[data-theme="light"] .bg-zinc-900 { background-color: #ffffff !important; }
+.App { min-height: 100vh; }
+
+/* ─── Base body with cinematic backdrop ─── */
+body {
+    position: relative;
+    background:
+        radial-gradient(1200px 600px at 12% -10%, rgba(99,102,241,0.10), transparent 60%),
+        radial-gradient(900px 500px at 95% 15%, rgba(167,139,250,0.08), transparent 60%),
+        radial-gradient(1200px 700px at 75% 100%, rgba(52,211,153,0.05), transparent 60%),
+        var(--cdxi-bg) !important;
+    overflow-x: hidden;
+}
+body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 0;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='1' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 0.06 0'/></filter><rect width='200' height='200' filter='url(%23n)'/></svg>");
+    opacity: 0.35;
+    mix-blend-mode: overlay;
+}
+[data-theme="light"] body::before { opacity: 0.18; mix-blend-mode: multiply; }
+
+/* Aurora — slow drifting gradient orbs anchored to the viewport */
+body::after {
+    content: "";
+    position: fixed;
+    inset: -20vh -20vw;
+    pointer-events: none;
+    z-index: 0;
+    background:
+        radial-gradient(40vw 30vw at 20% 25%, rgba(99,102,241,0.18), transparent 60%),
+        radial-gradient(40vw 30vw at 80% 75%, rgba(167,139,250,0.14), transparent 60%);
+    filter: blur(40px);
+    animation: cdxi-aurora 28s ease-in-out infinite alternate;
+}
+[data-theme="light"] body::after { opacity: 0.55; }
+
+@keyframes cdxi-aurora {
+    0%   { transform: translate3d(0,0,0) scale(1);   }
+    50%  { transform: translate3d(2vw,-1vh,0) scale(1.05); }
+    100% { transform: translate3d(-1vw,1vh,0) scale(0.98); }
+}
+
+/* Make sure foreground content sits above the backdrop layers */
+.App, body > div { position: relative; z-index: 1; }
+
+/* Global theme transition */
+*, *::before, *::after {
+    transition:
+        background-color 0.24s var(--cdxi-ease),
+        border-color 0.24s var(--cdxi-ease),
+        color 0.18s var(--cdxi-ease),
+        box-shadow 0.3s var(--cdxi-ease),
+        transform 0.18s var(--cdxi-ease);
+}
+
+/* ============================================================
+   Light mode overrides — keep tailwind class compat
+   ============================================================ */
+[data-theme="light"] .bg-zinc-950 { background-color: transparent !important; }
+[data-theme="light"] .bg-zinc-900 { background-color: var(--cdxi-card) !important; }
 [data-theme="light"] .bg-zinc-800,
 [data-theme="light"] .bg-zinc-800\/50,
 [data-theme="light"] .bg-zinc-800\/30 { background-color: #f1f5f9 !important; }
-
 [data-theme="light"] .bg-zinc-900\/50,
+[data-theme="light"] .bg-zinc-900\/60,
 [data-theme="light"] .bg-zinc-900\/80,
-[data-theme="light"] .bg-zinc-900\/90 { background-color: rgba(255,255,255,0.92) !important; }
+[data-theme="light"] .bg-zinc-900\/90 { background-color: rgba(255,255,255,0.94) !important; }
+[data-theme="light"] .bg-zinc-950\/90 { background-color: rgba(246,247,251,0.92) !important; }
 
-[data-theme="light"] .bg-zinc-950\/90 { background-color: rgba(240,242,245,0.92) !important; }
+/* dark mode: make 'bg-zinc-950' translucent so aurora can show through */
+.bg-zinc-950 { background-color: transparent !important; }
+.bg-zinc-900 { background-color: rgba(17, 19, 28, 0.72) !important; backdrop-filter: blur(8px); }
+.bg-zinc-900\/50 { background-color: rgba(17, 19, 28, 0.55) !important; backdrop-filter: blur(8px); }
+.bg-zinc-900\/60 { background-color: rgba(17, 19, 28, 0.62) !important; backdrop-filter: blur(8px); }
+.bg-zinc-900\/80 { background-color: rgba(17, 19, 28, 0.82) !important; backdrop-filter: blur(8px); }
+.bg-zinc-900\/90 { background-color: rgba(17, 19, 28, 0.9) !important; backdrop-filter: blur(10px); }
+.bg-zinc-950\/90 { background-color: rgba(8, 9, 15, 0.85) !important; backdrop-filter: blur(10px); }
 
 /* text */
-[data-theme="light"] .text-white { color: #0f172a !important; }
+[data-theme="light"] .text-white { color: var(--cdxi-text) !important; }
 [data-theme="light"] .text-zinc-100 { color: #1e293b !important; }
 [data-theme="light"] .text-zinc-200 { color: #334155 !important; }
 [data-theme="light"] .text-zinc-300 { color: #475569 !important; }
@@ -44,32 +144,21 @@
 /* borders */
 [data-theme="light"] .border-zinc-800,
 [data-theme="light"] .border-zinc-800\/70,
-[data-theme="light"] .border-zinc-800\/50 { border-color: #e2e8f0 !important; }
+[data-theme="light"] .border-zinc-800\/50 { border-color: var(--cdxi-border) !important; }
 [data-theme="light"] .border-zinc-700 { border-color: #cbd5e1 !important; }
 [data-theme="light"] .border-zinc-600 { border-color: #94a3b8 !important; }
-
-/* sidebar */
 [data-theme="light"] .border-r.border-zinc-800,
-[data-theme="light"] .border-r { border-color: #e2e8f0 !important; }
+[data-theme="light"] .border-r { border-color: var(--cdxi-border) !important; }
 
 /* hover backgrounds */
 [data-theme="light"] .hover\:bg-zinc-800\/50:hover { background-color: #f1f5f9 !important; }
 [data-theme="light"] .hover\:bg-zinc-800\/30:hover { background-color: #f8fafc !important; }
-
-/* table rows */
 [data-theme="light"] .divide-zinc-800\/50 > * + * { border-color: #f1f5f9 !important; }
 
-/* card accent backgrounds - keep indigo tones readable */
+/* Light-mode accent backgrounds */
 [data-theme="light"] .bg-indigo-500\/10 { background-color: #eef2ff !important; }
-[data-theme="light"] .bg-indigo-500\/5 { background-color: #f0f4ff !important; }
+[data-theme="light"] .bg-indigo-500\/5  { background-color: #f0f4ff !important; }
 [data-theme="light"] .border-indigo-500\/20 { border-color: #a5b4fc !important; }
-
-/* ──────────────────────────────────────────────────────────
-   Light mode — accent text colors (boost contrast on white)
-   The dark theme uses 400-shade colors which are too light
-   on white backgrounds. Bump to 600/700 for readability.
-   ────────────────────────────────────────────────────────── */
-[data-theme="light"] .text-zinc-400 { color: #475569 !important; }
 [data-theme="light"] .text-indigo-400,
 [data-theme="light"] .text-indigo-300 { color: #4338ca !important; }
 [data-theme="light"] .text-emerald-400,
@@ -83,8 +172,6 @@
 [data-theme="light"] .text-red-400,
 [data-theme="light"] .text-red-300 { color: #b91c1c !important; }
 [data-theme="light"] .text-orange-400 { color: #c2410c !important; }
-
-/* Accent backgrounds — slightly more saturated for readable badges */
 [data-theme="light"] .bg-emerald-500\/10 { background-color: #d1fae5 !important; }
 [data-theme="light"] .bg-emerald-500\/5  { background-color: #ecfdf5 !important; }
 [data-theme="light"] .bg-blue-500\/10    { background-color: #dbeafe !important; }
@@ -95,8 +182,6 @@
 [data-theme="light"] .bg-red-500\/10     { background-color: #fee2e2 !important; }
 [data-theme="light"] .bg-red-500\/5      { background-color: #fef2f2 !important; }
 [data-theme="light"] .bg-zinc-500\/10    { background-color: #e2e8f0 !important; }
-
-/* Accent borders — slightly stronger so badges/columns don't bleed */
 [data-theme="light"] .border-emerald-500\/20 { border-color: #6ee7b7 !important; }
 [data-theme="light"] .border-blue-500\/20    { border-color: #93c5fd !important; }
 [data-theme="light"] .border-violet-500\/20  { border-color: #c4b5fd !important; }
@@ -104,32 +189,152 @@
 [data-theme="light"] .border-red-500\/20     { border-color: #fca5a5 !important; }
 [data-theme="light"] .border-indigo-500\/30  { border-color: #a5b4fc !important; }
 
-/* Light-mode shadow boost on cards */
-[data-theme="light"] .rounded-xl.border { box-shadow: 0 1px 2px rgba(15,23,42,0.04); }
+/* Light-mode card shadow */
+[data-theme="light"] .rounded-xl.border,
+[data-theme="light"] .rounded-2xl.border { box-shadow: var(--cdxi-card-shadow); }
 
-/* Logo: in light mode use solid dark indigo instead of white-gradient */
+/* Logo glow */
+[data-cdxi-logo] {
+    text-shadow: 0 0 30px rgba(165,180,252,0.25);
+    animation: cdxi-logo-breathe 8s ease-in-out infinite alternate;
+}
+@keyframes cdxi-logo-breathe {
+    0%   { filter: drop-shadow(0 0 6px rgba(99,102,241,0.25)); }
+    100% { filter: drop-shadow(0 0 14px rgba(165,180,252,0.55)); }
+}
 [data-theme="light"] [data-cdxi-logo] {
     background: linear-gradient(135deg, #1e293b 0%, #4338ca 55%, #6366f1 100%) !important;
     -webkit-background-clip: text !important;
     background-clip: text !important;
     -webkit-text-fill-color: transparent !important;
+    text-shadow: none;
+    filter: none !important;
+    animation: none;
 }
 
-/* status badges — keep as is (they have enough contrast) */
-
-/* scrollbar */
-[data-theme="light"] ::-webkit-scrollbar { background: #f0f2f5; }
-[data-theme="light"] ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 8px; }
+/* ============================================================
+   Card hover lift + glow
+   ============================================================ */
+.rounded-xl.border,
+.rounded-2xl.border {
+    transition:
+        background-color 0.24s var(--cdxi-ease),
+        border-color 0.24s var(--cdxi-ease),
+        transform 0.24s var(--cdxi-ease),
+        box-shadow 0.3s var(--cdxi-ease) !important;
+}
+.rounded-xl.border.bg-zinc-900:hover,
+.rounded-2xl.border.bg-zinc-900:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 12px 32px -12px rgba(99,102,241,0.18), 0 1px 0 rgba(255,255,255,0.06) inset;
+}
 
 /* ============================================================
-   Custom cdxi scrollbar (dark)
+   Entrance animations — staggered fade-up
+   ============================================================ */
+@keyframes cdxi-fade-up {
+    0%   { opacity: 0; transform: translateY(8px); }
+    100% { opacity: 1; transform: translateY(0); }
+}
+@keyframes cdxi-fade-in {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+}
+
+/* Auto-apply staggered entrance to KPI rows + section cards */
+main > div > div.grid > * {
+    animation: cdxi-fade-up 0.55s var(--cdxi-ease) both;
+}
+main > div > div.grid > *:nth-child(1) { animation-delay: 0.04s; }
+main > div > div.grid > *:nth-child(2) { animation-delay: 0.10s; }
+main > div > div.grid > *:nth-child(3) { animation-delay: 0.16s; }
+main > div > div.grid > *:nth-child(4) { animation-delay: 0.22s; }
+main > div > div.grid > *:nth-child(5) { animation-delay: 0.28s; }
+main > div > div.grid > *:nth-child(6) { animation-delay: 0.34s; }
+main > div > div.grid > *:nth-child(n+7) { animation-delay: 0.40s; }
+
+/* Headings fade in */
+main h1, main h2 { animation: cdxi-fade-in 0.5s var(--cdxi-ease) both; }
+
+/* ============================================================
+   Breathing pulse — used on "Live" pill green dot, agent thinking
+   ============================================================ */
+.bg-emerald-400 {
+    animation: cdxi-pulse 2.2s ease-in-out infinite;
+}
+@keyframes cdxi-pulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(52,211,153,0.55), 0 0 8px rgba(52,211,153,0.35); }
+    50%      { box-shadow: 0 0 0 6px rgba(52,211,153,0),    0 0 14px rgba(52,211,153,0.55); }
+}
+
+/* ============================================================
+   Active nav pill animated gradient
+   ============================================================ */
+.bg-indigo-500\/10.border-indigo-500\/20,
+.bg-indigo-500\/10.border-indigo-500\/30 {
+    background-image: linear-gradient(135deg, rgba(99,102,241,0.16), rgba(167,139,250,0.08));
+    background-size: 200% 200%;
+    animation: cdxi-shift 12s ease-in-out infinite;
+}
+@keyframes cdxi-shift {
+    0%, 100% { background-position: 0% 50%; }
+    50%      { background-position: 100% 50%; }
+}
+
+/* ============================================================
+   Buttons — micro shine on primary indigo
+   ============================================================ */
+.bg-indigo-500:not(.bg-indigo-500\/10):not(.bg-indigo-500\/5),
+.bg-indigo-600:not(.bg-indigo-600\/10) {
+    background-image: linear-gradient(135deg, #6366f1 0%, #818cf8 100%);
+    box-shadow: 0 4px 16px -4px rgba(99,102,241,0.45), 0 0 0 1px rgba(165,180,252,0.1) inset;
+}
+.bg-indigo-500:not(.bg-indigo-500\/10):not(.bg-indigo-500\/5):hover {
+    background-image: linear-gradient(135deg, #4f46e5 0%, #6366f1 100%);
+    box-shadow: 0 6px 24px -4px rgba(99,102,241,0.6), 0 0 0 1px rgba(165,180,252,0.2) inset;
+}
+
+/* ============================================================
+   Table row hover — subtle indigo wash
+   ============================================================ */
+.hover\:bg-zinc-800\/50:hover {
+    background-color: rgba(99,102,241,0.06) !important;
+}
+[data-theme="light"] .hover\:bg-zinc-800\/50:hover {
+    background-color: #eef2ff !important;
+}
+
+/* ============================================================
+   Big KPI numbers — number tween
+   ============================================================ */
+.text-3xl, .text-4xl, .text-5xl, .text-6xl {
+    animation: cdxi-fade-up 0.7s var(--cdxi-ease) both;
+}
+
+/* ============================================================
+   Custom Righteous font helper
+   ============================================================ */
+.font-righteous { font-family: 'Righteous', system-ui, cursive !important; }
+
+/* ============================================================
+   Scrollbar (dark + light)
    ============================================================ */
 ::-webkit-scrollbar { width: 5px; height: 5px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 8px; }
-::-webkit-scrollbar-thumb:hover { background: #52525b; }
+::-webkit-scrollbar-thumb { background: #2a2d3d; border-radius: 8px; }
+::-webkit-scrollbar-thumb:hover { background: #3f4258; }
+[data-theme="light"] ::-webkit-scrollbar-thumb { background: #cbd5e1; }
+[data-theme="light"] ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
 
 /* ============================================================
-   Righteous font class
+   Reduced-motion users — respect their preference
    ============================================================ */
-.font-righteous { font-family: 'Righteous', system-ui, cursive !important; }
+@media (prefers-reduced-motion: reduce) {
+    body::after,
+    [data-cdxi-logo],
+    .bg-emerald-400,
+    .bg-indigo-500\/10.border-indigo-500\/20 { animation: none !important; }
+    main > div > div.grid > *,
+    .text-3xl, .text-4xl, .text-5xl, .text-6xl,
+    main h1, main h2 { animation: none !important; }
+}
