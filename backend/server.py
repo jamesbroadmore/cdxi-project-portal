@@ -2284,7 +2284,8 @@ async def update_tenant(
 async def switch_tenant(tenant_slug: str, user: dict = Depends(get_current_user)) -> dict:
     """Move the current user into the specified tenant. Admins only.
 
-    Returns a fresh access token reflecting the new tenant on next /auth/me.
+    The user's current JWT remains valid; tenant scope is resolved from the
+    user record on every request, so the next API call reflects the new tenant.
     """
     if user.get("role") != "admin":
         raise HTTPException(status_code=403, detail="Only admins can switch tenants")

@@ -123,8 +123,12 @@ async def main() -> int:
     parser.add_argument("--tenant", default=DEFAULT_TENANT, help="Tenant id to seed for (default: 'default')")
     args = parser.parse_args()
 
-    mongo_url = os.environ.get("MONGO_URL", "mongodb://localhost:27017")
-    db_name = os.environ.get("DB_NAME", "test_database")
+    mongo_url = os.environ.get("MONGO_URL")
+    db_name = os.environ.get("DB_NAME")
+    if not mongo_url or not db_name:
+        print("ERROR: MONGO_URL and DB_NAME env vars are required.", file=sys.stderr)
+        print("Run with: MONGO_URL=mongodb://localhost:27017 DB_NAME=<db> python backend/scripts/reseed.py", file=sys.stderr)
+        return 2
     client = AsyncIOMotorClient(mongo_url)
     db = client[db_name]
     try:
