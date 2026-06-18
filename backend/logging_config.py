@@ -47,7 +47,7 @@ def setup_logging(log_level: str = "INFO", app_name: str = "cdxi-api"):
     error_handler.setFormatter(formatter)
     logger.addHandler(error_handler)
     
-    return logger;
+    return logger
 
 
 # Silence noisy loggers

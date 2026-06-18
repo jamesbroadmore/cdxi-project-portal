@@ -6,7 +6,7 @@ import { useAuth } from "@/context/AuthContext";
 import { useTheme } from "@/context/ThemeContext";
 import {
   LayoutDashboard, Users, FolderKanban, Clock, FileText,
-  Bot, Settings, LogOut, ChevronLeft, ChevronRight, Menu, X, Sun, Moon,
+  Bot, Settings, LogOut, ChevronLeft, ChevronRight, Menu, X, Sun, Moon, Palette,
   Building2, ChevronDown, Check,
 } from "lucide-react";
 
